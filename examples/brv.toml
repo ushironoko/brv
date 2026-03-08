@@ -1,0 +1,82 @@
+# brv configuration example
+# Place this file at: ~/.config/brv/brv.toml
+
+[settings]
+strict = false  # true: サフィックス衝突もエラーにする
+
+# === Git shortcuts ===
+
+[[abbr]]
+keyword = "g"
+expansion = "git"
+
+[[abbr]]
+keyword = "ga"
+expansion = "git add"
+
+[[abbr]]
+keyword = "gc"
+expansion = "git commit -m '{{message}}'"
+
+[[abbr]]
+keyword = "gp"
+expansion = "git push"
+
+[[abbr]]
+keyword = "gpl"
+expansion = "git pull"
+
+[[abbr]]
+keyword = "gst"
+expansion = "git status"
+
+[[abbr]]
+keyword = "gd"
+expansion = "git diff"
+
+[[abbr]]
+keyword = "gl"
+expansion = "git log --oneline"
+
+[[abbr]]
+keyword = "gco"
+expansion = "git checkout"
+
+[[abbr]]
+keyword = "gsw"
+expansion = "git switch"
+
+# === Global abbreviations ===
+
+[[abbr]]
+keyword = "NE"
+expansion = "2>/dev/null"
+global = true
+
+[[abbr]]
+keyword = "DN"
+expansion = "/dev/null"
+global = true
+
+# === Context abbreviations ===
+
+[[abbr]]
+keyword = "main"
+expansion = "main --branch"
+context.lbuffer = "^git (checkout|switch) "
+
+# === Evaluate abbreviations ===
+
+# [[abbr]]
+# keyword = "TODAY"
+# expansion = "date +%Y-%m-%d"
+# evaluate = true
+# global = true
+
+# === Conflict examples ===
+
+# This would normally conflict with /usr/local/bin/gs (Ghostscript)
+# [[abbr]]
+# keyword = "gs"
+# expansion = "git status --short"
+# allow_conflict = true
