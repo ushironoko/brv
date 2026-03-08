@@ -24,7 +24,7 @@ brv.toml (TOML設定)
 brv compile ─── PATH スキャン + シェルビルトイン照合 ─── 衝突検出 → エラー or 警告
     │
     ▼
-brv.cache (バイナリキャッシュ: bincode)
+brv.cache (バイナリキャッシュ: bitcode)
     │
     ▼
 brv expand ─── キャッシュ読み込み → HashMap ルックアップ → 結果出力
@@ -44,7 +44,7 @@ ZLE ウィジェット ─── $BUFFER/$CURSOR 書き換え
 - **expand.rs**: 展開ロジック (トークナイズ → ルックアップ → 結果)
 - **placeholder.rs**: {{placeholder}} 処理
 - **context.rs**: lbuffer/rbuffer 正規表現コンテキスト判定
-- **cache.rs**: バイナリキャッシュ読み書き (bincode)
+- **cache.rs**: バイナリキャッシュ読み書き (bitcode)
 - **output.rs**: ZLE 向け出力フォーマット
 
 ## Dependency Version Policy

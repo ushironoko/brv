@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 /// Cache format version
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 /// Binary cache
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,7 +40,7 @@ pub fn write(output_path: &Path, matcher: &Matcher, config_path: &Path) -> Resul
             .with_context(|| format!("failed to create cache directory: {}", parent.display()))?;
     }
 
-    let encoded = bincode::serialize(&cache).context("failed to serialize cache")?;
+    let encoded = bitcode::serialize(&cache).context("failed to serialize cache")?;
     std::fs::write(output_path, encoded)
         .with_context(|| format!("failed to write cache file: {}", output_path.display()))?;
 
@@ -53,7 +53,7 @@ pub fn read(cache_path: &Path) -> Result<CompiledCache> {
         .with_context(|| format!("failed to read cache file: {}", cache_path.display()))?;
 
     let cache: CompiledCache =
-        bincode::deserialize(&data).context("failed to deserialize cache")?;
+        bitcode::deserialize(&data).context("failed to deserialize cache")?;
 
     if cache.version != CACHE_VERSION {
         anyhow::bail!(

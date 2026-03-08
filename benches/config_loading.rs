@@ -42,7 +42,7 @@ fn bench_cache_read(c: &mut Criterion) {
         let cache_path = dir.path().join("brv.cache");
         cache::write(&cache_path, &m, &config_path).unwrap();
 
-        group.bench_with_input(BenchmarkId::new("bincode", size), &cache_path, |b, path| {
+        group.bench_with_input(BenchmarkId::new("bitcode", size), &cache_path, |b, path| {
             b.iter(|| cache::read(black_box(path)).unwrap());
         });
     }
