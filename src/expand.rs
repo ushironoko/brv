@@ -98,25 +98,44 @@ pub fn expand(input: &ExpandInput, matcher_data: &Matcher, prefixes: &[String]) 
         return ExpandOutput::NoMatch;
     };
 
-    // 1. Search contextual abbreviations (highest priority, now HashMap-indexed)
-    if let Some(abbr) =
-        context::find_contextual_match(&matcher_data.contextual, keyword, prefix, &input.rbuffer)
-    {
-        return build_output(prefix, abbr, keyword, &input.rbuffer);
-    }
-
-    // 2. Command-scoped: extract command from last segment
-    let segment = last_command_segment(&input.lbuffer);
-    if let Some(cmd) = extract_command(segment) {
-        if let Some(abbr) = matcher::lookup_command_scoped(matcher_data, cmd, keyword) {
+    // 1. Search contextual abbreviations (highest priority, skip if none registered)
+    if !matcher_data.contextual.is_empty() {
+        if let Some(abbr) =
+            context::find_contextual_match(&matcher_data.contextual, keyword, prefix, &input.rbuffer)
+        {
             return build_output(prefix, abbr, keyword, &input.rbuffer);
         }
     }
 
-    // 3. If in command position (or after prefix), search regular abbreviations
-    if is_command_or_prefix_position(segment, keyword, prefixes) {
-        if let Some(abbr) = matcher::lookup_regular(matcher_data, keyword) {
-            return build_output(prefix, abbr, keyword, &input.rbuffer);
+    // Fast path: if no command-scoped, no prefixes, and no regex abbreviations,
+    // use simple command position check (avoids last_command_segment parsing)
+    let has_advanced_features = !matcher_data.command_scoped.is_empty()
+        || !prefixes.is_empty()
+        || !matcher_data.regex_abbrs.is_empty();
+
+    if has_advanced_features {
+        // 2. Command-scoped: extract command from last segment
+        let segment = last_command_segment(&input.lbuffer);
+        if !matcher_data.command_scoped.is_empty() {
+            if let Some(cmd) = extract_command(segment) {
+                if let Some(abbr) = matcher::lookup_command_scoped(matcher_data, cmd, keyword) {
+                    return build_output(prefix, abbr, keyword, &input.rbuffer);
+                }
+            }
+        }
+
+        // 3. If in command position (or after prefix), search regular abbreviations
+        if is_command_or_prefix_position(segment, keyword, prefixes) {
+            if let Some(abbr) = matcher::lookup_regular(matcher_data, keyword) {
+                return build_output(prefix, abbr, keyword, &input.rbuffer);
+            }
+        }
+    } else {
+        // Fast path: simple command position check (no segment parsing needed)
+        if prefix.trim().is_empty() {
+            if let Some(abbr) = matcher::lookup_regular(matcher_data, keyword) {
+                return build_output(prefix, abbr, keyword, &input.rbuffer);
+            }
         }
     }
 
