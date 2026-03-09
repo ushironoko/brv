@@ -1,33 +1,67 @@
 use crate::matcher::{AbbrScope, CompiledAbbr};
 use regex::Regex;
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 
-/// Check context conditions
+/// Lazy regex cache that compiles patterns on first use.
+/// Only the patterns actually needed for the current expansion are compiled,
+/// avoiding the cost of eagerly compiling all patterns on every CLI invocation.
+#[derive(Debug)]
+pub struct RegexCache {
+    cache: RefCell<FxHashMap<String, Regex>>,
+}
+
+impl RegexCache {
+    /// Create an empty lazy regex cache.
+    pub fn new() -> Self {
+        Self {
+            cache: RefCell::new(FxHashMap::default()),
+        }
+    }
+
+    /// Check if `pattern` matches `text`. Compiles and caches the regex on first use.
+    /// Returns `None` if the regex pattern is invalid.
+    pub fn is_match(&self, pattern: &str, text: &str) -> Option<bool> {
+        let cache = self.cache.borrow();
+        if let Some(re) = cache.get(pattern) {
+            return Some(re.is_match(text));
+        }
+        drop(cache);
+
+        let re = Regex::new(pattern).ok()?;
+        let result = re.is_match(text);
+        self.cache.borrow_mut().insert(pattern.to_string(), re);
+        Some(result)
+    }
+}
+
+impl Default for RegexCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Check context conditions using lazily-compiled regexes
 /// Match against lbuffer/rbuffer regex patterns from AbbrScope::Contextual
-pub fn matches_context(abbr: &CompiledAbbr, lbuffer: &str, rbuffer: &str) -> bool {
+pub fn matches_context(
+    abbr: &CompiledAbbr,
+    lbuffer: &str,
+    rbuffer: &str,
+    regex_cache: &RegexCache,
+) -> bool {
     match &abbr.scope {
         AbbrScope::Contextual {
             lbuffer: lb_pat,
             rbuffer: rb_pat,
         } => {
             if let Some(ref pattern) = lb_pat {
-                match Regex::new(pattern) {
-                    Ok(re) => {
-                        if !re.is_match(lbuffer) {
-                            return false;
-                        }
-                    }
-                    Err(_) => return false,
+                if regex_cache.is_match(pattern, lbuffer) != Some(true) {
+                    return false;
                 }
             }
             if let Some(ref pattern) = rb_pat {
-                match Regex::new(pattern) {
-                    Ok(re) => {
-                        if !re.is_match(rbuffer) {
-                            return false;
-                        }
-                    }
-                    Err(_) => return false,
+                if regex_cache.is_match(pattern, rbuffer) != Some(true) {
+                    return false;
                 }
             }
             true
@@ -36,17 +70,18 @@ pub fn matches_context(abbr: &CompiledAbbr, lbuffer: &str, rbuffer: &str) -> boo
     }
 }
 
-/// Find matching contextual abbreviation from HashMap
+/// Find matching contextual abbreviation from HashMap using pre-compiled regexes
 pub fn find_contextual_match<'a>(
     contextual: &'a FxHashMap<String, Vec<CompiledAbbr>>,
     keyword: &str,
     lbuffer: &str,
     rbuffer: &str,
+    regex_cache: &RegexCache,
 ) -> Option<&'a CompiledAbbr> {
     contextual
         .get(keyword)?
         .iter()
-        .find(|abbr| matches_context(abbr, lbuffer, rbuffer))
+        .find(|abbr| matches_context(abbr, lbuffer, rbuffer, regex_cache))
 }
 
 #[cfg(test)]
@@ -74,17 +109,19 @@ mod tests {
     #[test]
     fn test_matches_lbuffer_pattern() {
         let abbr = make_contextual("main", "main --branch", Some("^git (checkout|switch)"), None);
-        assert!(matches_context(&abbr, "git checkout ", ""));
-        assert!(matches_context(&abbr, "git switch ", ""));
-        assert!(!matches_context(&abbr, "git commit ", ""));
-        assert!(!matches_context(&abbr, "", ""));
+        let cache = RegexCache::new();
+        assert!(matches_context(&abbr, "git checkout ", "", &cache));
+        assert!(matches_context(&abbr, "git switch ", "", &cache));
+        assert!(!matches_context(&abbr, "git commit ", "", &cache));
+        assert!(!matches_context(&abbr, "", "", &cache));
     }
 
     #[test]
     fn test_matches_rbuffer_pattern() {
         let abbr = make_contextual("--force", "--force-with-lease", None, Some("$"));
-        assert!(matches_context(&abbr, "git push ", ""));
-        assert!(matches_context(&abbr, "", ""));
+        let cache = RegexCache::new();
+        assert!(matches_context(&abbr, "git push ", "", &cache));
+        assert!(matches_context(&abbr, "", "", &cache));
     }
 
     #[test]
@@ -95,8 +132,9 @@ mod tests {
             Some("^git checkout"),
             Some("$"),
         );
-        assert!(matches_context(&abbr, "git checkout ", ""));
-        assert!(!matches_context(&abbr, "echo ", ""));
+        let cache = RegexCache::new();
+        assert!(matches_context(&abbr, "git checkout ", "", &cache));
+        assert!(!matches_context(&abbr, "echo ", "", &cache));
     }
 
     #[test]
@@ -106,7 +144,8 @@ mod tests {
             expansion: "git".to_string(),
             ..Default::default()
         };
-        assert!(matches_context(&abbr, "anything", "anything"));
+        let cache = RegexCache::new();
+        assert!(matches_context(&abbr, "anything", "anything", &cache));
     }
 
     #[test]
@@ -119,18 +158,30 @@ mod tests {
             make_contextual("main", "int main()", Some("^#include"), None),
         );
 
-        let result = find_contextual_match(&contextual, "main", "git checkout ", "");
+        let cache = RegexCache::new();
+
+        let result = find_contextual_match(&contextual, "main", "git checkout ", "", &cache);
         assert!(result.is_some());
         assert_eq!(result.unwrap().expansion, "main --branch");
 
-        let result = find_contextual_match(&contextual, "main", "#include <stdio.h>\n", "");
+        let result = find_contextual_match(&contextual, "main", "#include <stdio.h>\n", "", &cache);
         assert!(result.is_some());
         assert_eq!(result.unwrap().expansion, "int main()");
 
-        let result = find_contextual_match(&contextual, "main", "echo ", "");
+        let result = find_contextual_match(&contextual, "main", "echo ", "", &cache);
         assert!(result.is_none());
 
-        let result = find_contextual_match(&contextual, "other", "git checkout ", "");
+        let result = find_contextual_match(&contextual, "other", "git checkout ", "", &cache);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_regex_cache_lazy_compilation() {
+        let cache = RegexCache::new();
+        // Pattern is compiled on first use
+        assert_eq!(cache.is_match("^git checkout", "git checkout main"), Some(true));
+        assert_eq!(cache.is_match("^git checkout", "echo hello"), Some(false));
+        // Invalid pattern returns None
+        assert_eq!(cache.is_match("[invalid", "anything"), None);
     }
 }

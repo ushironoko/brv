@@ -239,8 +239,12 @@ pub fn detect_conflicts(
 
         let keyword = &abbr.keyword;
 
-        // 1. Check for shell builtin conflicts
-        if builtins.contains(&keyword.as_str()) {
+        // 1. Check for shell builtin conflicts (binary search on sorted array)
+        debug_assert!(
+            builtins.windows(2).all(|w| w[0] <= w[1]),
+            "zsh_builtins() must be lexicographically sorted for binary_search"
+        );
+        if builtins.binary_search(&keyword.as_str()).is_ok() {
             report.errors.push(Conflict {
                 keyword: keyword.clone(),
                 conflict_type: ConflictType::ShellBuiltin,
@@ -444,6 +448,19 @@ mod tests {
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].conflict_type, ConflictType::ExactPathMatch);
         assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_zsh_builtins_sorted() {
+        let builtins = zsh_builtins();
+        for window in builtins.windows(2) {
+            assert!(
+                window[0] < window[1],
+                "zsh_builtins() not sorted: \"{}\" should come before \"{}\"",
+                window[1],
+                window[0]
+            );
+        }
     }
 
     #[test]
