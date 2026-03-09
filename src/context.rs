@@ -1,60 +1,47 @@
-use crate::matcher::{AbbrScope, CompiledAbbr, Matcher};
+use crate::matcher::{AbbrScope, CompiledAbbr};
 use regex::Regex;
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 
-/// Pre-compiled regex cache for O(1) pattern lookup at expand time.
-/// Built once after cache deserialization to avoid repeated Regex::new() calls.
+/// Lazy regex cache that compiles patterns on first use.
+/// Only the patterns actually needed for the current expansion are compiled,
+/// avoiding the cost of eagerly compiling all patterns on every CLI invocation.
 #[derive(Debug)]
 pub struct RegexCache {
-    cache: FxHashMap<String, Regex>,
+    cache: RefCell<FxHashMap<String, Regex>>,
 }
 
 impl RegexCache {
-    /// Build a RegexCache from all regex patterns in the Matcher.
-    /// Compiles contextual lbuffer/rbuffer patterns and regex-keyword patterns.
-    pub fn from_matcher(matcher: &Matcher) -> Self {
-        let mut cache = FxHashMap::default();
-        for abbrs in matcher.contextual.values() {
-            for abbr in abbrs {
-                if let AbbrScope::Contextual {
-                    lbuffer,
-                    rbuffer,
-                } = &abbr.scope
-                {
-                    if let Some(pat) = lbuffer {
-                        if !cache.contains_key(pat) {
-                            if let Ok(re) = Regex::new(pat) {
-                                cache.insert(pat.clone(), re);
-                            }
-                        }
-                    }
-                    if let Some(pat) = rbuffer {
-                        if !cache.contains_key(pat) {
-                            if let Ok(re) = Regex::new(pat) {
-                                cache.insert(pat.clone(), re);
-                            }
-                        }
-                    }
-                }
-            }
+    /// Create an empty lazy regex cache.
+    pub fn new() -> Self {
+        Self {
+            cache: RefCell::new(FxHashMap::default()),
         }
-        for abbr in &matcher.regex_abbrs {
-            if !cache.contains_key(&abbr.keyword) {
-                if let Ok(re) = Regex::new(&abbr.keyword) {
-                    cache.insert(abbr.keyword.clone(), re);
-                }
-            }
-        }
-        Self { cache }
     }
 
-    /// Look up a pre-compiled regex by its pattern string.
-    pub fn get(&self, pattern: &str) -> Option<&Regex> {
-        self.cache.get(pattern)
+    /// Check if `pattern` matches `text`. Compiles and caches the regex on first use.
+    /// Returns `None` if the regex pattern is invalid.
+    pub fn is_match(&self, pattern: &str, text: &str) -> Option<bool> {
+        let cache = self.cache.borrow();
+        if let Some(re) = cache.get(pattern) {
+            return Some(re.is_match(text));
+        }
+        drop(cache);
+
+        let re = Regex::new(pattern).ok()?;
+        let result = re.is_match(text);
+        self.cache.borrow_mut().insert(pattern.to_string(), re);
+        Some(result)
     }
 }
 
-/// Check context conditions using pre-compiled regexes
+impl Default for RegexCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Check context conditions using lazily-compiled regexes
 /// Match against lbuffer/rbuffer regex patterns from AbbrScope::Contextual
 pub fn matches_context(
     abbr: &CompiledAbbr,
@@ -68,23 +55,13 @@ pub fn matches_context(
             rbuffer: rb_pat,
         } => {
             if let Some(ref pattern) = lb_pat {
-                match regex_cache.get(pattern) {
-                    Some(re) => {
-                        if !re.is_match(lbuffer) {
-                            return false;
-                        }
-                    }
-                    None => return false,
+                if regex_cache.is_match(pattern, lbuffer) != Some(true) {
+                    return false;
                 }
             }
             if let Some(ref pattern) = rb_pat {
-                match regex_cache.get(pattern) {
-                    Some(re) => {
-                        if !re.is_match(rbuffer) {
-                            return false;
-                        }
-                    }
-                    None => return false,
+                if regex_cache.is_match(pattern, rbuffer) != Some(true) {
+                    return false;
                 }
             }
             true
@@ -110,7 +87,7 @@ pub fn find_contextual_match<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::matcher::{AbbrScope, CompiledAbbr, Matcher};
+    use crate::matcher::{AbbrScope, CompiledAbbr};
 
     fn make_contextual(
         keyword: &str,
@@ -129,27 +106,10 @@ mod tests {
         }
     }
 
-    fn build_regex_cache_from_contextual(
-        contextual: &FxHashMap<String, Vec<CompiledAbbr>>,
-    ) -> RegexCache {
-        let mut matcher = Matcher::new();
-        matcher.contextual = contextual.clone();
-        RegexCache::from_matcher(&matcher)
-    }
-
-    fn regex_cache_for_abbr(abbr: &CompiledAbbr) -> RegexCache {
-        let mut contextual: FxHashMap<String, Vec<CompiledAbbr>> = FxHashMap::default();
-        contextual
-            .entry(abbr.keyword.clone())
-            .or_default()
-            .push(abbr.clone());
-        build_regex_cache_from_contextual(&contextual)
-    }
-
     #[test]
     fn test_matches_lbuffer_pattern() {
         let abbr = make_contextual("main", "main --branch", Some("^git (checkout|switch)"), None);
-        let cache = regex_cache_for_abbr(&abbr);
+        let cache = RegexCache::new();
         assert!(matches_context(&abbr, "git checkout ", "", &cache));
         assert!(matches_context(&abbr, "git switch ", "", &cache));
         assert!(!matches_context(&abbr, "git commit ", "", &cache));
@@ -159,7 +119,7 @@ mod tests {
     #[test]
     fn test_matches_rbuffer_pattern() {
         let abbr = make_contextual("--force", "--force-with-lease", None, Some("$"));
-        let cache = regex_cache_for_abbr(&abbr);
+        let cache = RegexCache::new();
         assert!(matches_context(&abbr, "git push ", "", &cache));
         assert!(matches_context(&abbr, "", "", &cache));
     }
@@ -172,7 +132,7 @@ mod tests {
             Some("^git checkout"),
             Some("$"),
         );
-        let cache = regex_cache_for_abbr(&abbr);
+        let cache = RegexCache::new();
         assert!(matches_context(&abbr, "git checkout ", "", &cache));
         assert!(!matches_context(&abbr, "echo ", "", &cache));
     }
@@ -184,7 +144,7 @@ mod tests {
             expansion: "git".to_string(),
             ..Default::default()
         };
-        let cache = RegexCache::from_matcher(&Matcher::new());
+        let cache = RegexCache::new();
         assert!(matches_context(&abbr, "anything", "anything", &cache));
     }
 
@@ -198,7 +158,7 @@ mod tests {
             make_contextual("main", "int main()", Some("^#include"), None),
         );
 
-        let cache = build_regex_cache_from_contextual(&contextual);
+        let cache = RegexCache::new();
 
         let result = find_contextual_match(&contextual, "main", "git checkout ", "", &cache);
         assert!(result.is_some());
@@ -216,21 +176,12 @@ mod tests {
     }
 
     #[test]
-    fn test_regex_cache_from_matcher() {
-        let mut matcher = Matcher::new();
-        matcher.contextual.entry("main".to_string()).or_default().push(
-            make_contextual("main", "main --branch", Some("^git checkout"), None),
-        );
-        matcher.regex_abbrs.push(CompiledAbbr {
-            keyword: r"^[A-Z]+$".to_string(),
-            expansion: "uppercase_match".to_string(),
-            scope: AbbrScope::RegexKeyword,
-            ..Default::default()
-        });
-
-        let cache = RegexCache::from_matcher(&matcher);
-        assert!(cache.get("^git checkout").is_some());
-        assert!(cache.get(r"^[A-Z]+$").is_some());
-        assert!(cache.get("nonexistent").is_none());
+    fn test_regex_cache_lazy_compilation() {
+        let cache = RegexCache::new();
+        // Pattern is compiled on first use
+        assert_eq!(cache.is_match("^git checkout", "git checkout main"), Some(true));
+        assert_eq!(cache.is_match("^git checkout", "echo hello"), Some(false));
+        // Invalid pattern returns None
+        assert_eq!(cache.is_match("[invalid", "anything"), None);
     }
 }

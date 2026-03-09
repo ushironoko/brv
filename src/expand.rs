@@ -154,12 +154,10 @@ pub fn expand(
         return build_output(prefix, abbr, keyword, &input.rbuffer);
     }
 
-    // 5. Regex-keyword abbreviations (pre-compiled regex lookup, linear scan)
+    // 5. Regex-keyword abbreviations (lazy-compiled regex lookup, linear scan)
     for abbr in &matcher_data.regex_abbrs {
-        if let Some(re) = regex_cache.get(&abbr.keyword) {
-            if re.is_match(keyword) {
-                return build_output(prefix, abbr, keyword, &input.rbuffer);
-            }
+        if regex_cache.is_match(&abbr.keyword, keyword) == Some(true) {
+            return build_output(prefix, abbr, keyword, &input.rbuffer);
         }
     }
 
@@ -292,8 +290,8 @@ mod tests {
         vec![]
     }
 
-    fn cache_for(matcher: &Matcher) -> RegexCache {
-        RegexCache::from_matcher(matcher)
+    fn cache_for(_matcher: &Matcher) -> RegexCache {
+        RegexCache::new()
     }
 
     #[test]

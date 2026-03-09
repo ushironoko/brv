@@ -383,7 +383,7 @@ fn cmd_expand(
         }
     }
 
-    let regex_cache = context::RegexCache::from_matcher(&compiled.matcher);
+    let regex_cache = context::RegexCache::new();
     let input = expand::ExpandInput { lbuffer, rbuffer };
     let result = expand::expand(&input, &compiled.matcher, &compiled.settings.prefixes, &regex_cache);
     println!("{}", result);
