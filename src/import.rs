@@ -76,19 +76,19 @@ pub fn import_fish(content: &str, config_path: &Path) -> Result<ImportResult> {
         }
 
         match parse_fish_abbr(line) {
-            Some((name, value, is_global)) => {
-                if name.contains(' ') || name.is_empty() || value.is_empty() {
+            Some(attrs) => {
+                if attrs.name.contains(' ') || attrs.name.is_empty() || attrs.expansion.is_empty() {
                     result.skipped.push(format!("{} (invalid format)", line));
                     continue;
                 }
                 let params = AddParams {
-                    keyword: name,
-                    expansion: value,
-                    global: is_global,
+                    keyword: attrs.name,
+                    expansion: attrs.expansion,
+                    global: attrs.is_global,
                     evaluate: false,
-                    function: false,
-                    regex: false,
-                    command: None,
+                    function: attrs.is_function,
+                    regex: attrs.is_regex,
+                    command: attrs.command,
                     allow_conflict: false,
                     context_lbuffer: None,
                     context_rbuffer: None,
@@ -107,7 +107,17 @@ pub fn import_fish(content: &str, config_path: &Path) -> Result<ImportResult> {
     Ok(result)
 }
 
-fn parse_fish_abbr(line: &str) -> Option<(String, String, bool)> {
+/// Parsed fish abbreviation attributes
+struct FishAbbrAttrs {
+    name: String,
+    expansion: String,
+    is_global: bool,
+    is_function: bool,
+    is_regex: bool,
+    command: Option<String>,
+}
+
+fn parse_fish_abbr(line: &str) -> Option<FishAbbrAttrs> {
     // Supported formats:
     // abbr -a name expansion
     // abbr -a -- name expansion
@@ -124,6 +134,9 @@ fn parse_fish_abbr(line: &str) -> Option<(String, String, bool)> {
     }
 
     let mut is_global = false;
+    let mut is_function = false;
+    let mut is_regex = false;
+    let mut command: Option<String> = None;
     let mut i = 1;
 
     // Known fish abbr flags and their arities:
@@ -134,7 +147,15 @@ fn parse_fish_abbr(line: &str) -> Option<(String, String, bool)> {
         match parts[i] {
             "-a" | "--add" | "-U" | "--universal" | "-e" | "--erase"
             | "-l" | "--list" | "-s" | "--show" | "-q" | "--query"
-            | "-h" | "--help" | "-r" | "--regex" | "-f" | "--function" => {
+            | "-h" | "--help" => {
+                i += 1;
+            }
+            "-r" | "--regex" => {
+                is_regex = true;
+                i += 1;
+            }
+            "-f" | "--function" => {
+                is_function = true;
                 i += 1;
             }
             "-g" | "--global" => {
@@ -145,9 +166,27 @@ fn parse_fish_abbr(line: &str) -> Option<(String, String, bool)> {
                 i += 1;
                 break;
             }
-            // Flags that consume a following value argument
-            "--position" | "-p" | "--set-cursor" | "--command" => {
+            // --position anywhere means global in kort
+            "--position" | "-p" => {
+                if i + 1 < parts.len() {
+                    if parts[i + 1] == "anywhere" {
+                        is_global = true;
+                    }
+                    i += 2; // skip flag and its value
+                } else {
+                    i += 1;
+                }
+            }
+            "--set-cursor" => {
                 i += 2; // skip flag and its value
+            }
+            "--command" => {
+                if i + 1 < parts.len() {
+                    command = Some(parts[i + 1].to_string());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
             }
             s if s.starts_with('-') => {
                 // Unknown flag — skip it and its potential value conservatively
@@ -166,7 +205,7 @@ fn parse_fish_abbr(line: &str) -> Option<(String, String, bool)> {
         return None;
     }
 
-    let name = parts[i].to_string();
+    let name = strip_quotes(parts[i]);
     i += 1;
 
     if i >= parts.len() {
@@ -177,7 +216,14 @@ fn parse_fish_abbr(line: &str) -> Option<(String, String, bool)> {
     let expansion_str = parts[i..].join(" ");
     let expansion = strip_quotes(&expansion_str);
 
-    Some((name, expansion, is_global))
+    Some(FishAbbrAttrs {
+        name,
+        expansion,
+        is_global,
+        is_function,
+        is_regex,
+        command,
+    })
 }
 
 fn strip_quotes(s: &str) -> String {
@@ -329,38 +375,68 @@ mod tests {
 
     #[test]
     fn test_parse_fish_abbr_simple() {
-        let (name, value, global) = parse_fish_abbr("abbr -a g git").unwrap();
-        assert_eq!(name, "g");
-        assert_eq!(value, "git");
-        assert!(!global);
+        let attrs = parse_fish_abbr("abbr -a g git").unwrap();
+        assert_eq!(attrs.name, "g");
+        assert_eq!(attrs.expansion, "git");
+        assert!(!attrs.is_global);
+        assert!(!attrs.is_function);
+        assert!(!attrs.is_regex);
+        assert!(attrs.command.is_none());
     }
 
     #[test]
     fn test_parse_fish_abbr_with_dashdash() {
-        let (name, value, _) = parse_fish_abbr("abbr -a -- gc 'git commit'").unwrap();
-        assert_eq!(name, "gc");
-        assert_eq!(value, "git commit");
+        let attrs = parse_fish_abbr("abbr -a -- gc 'git commit'").unwrap();
+        assert_eq!(attrs.name, "gc");
+        assert_eq!(attrs.expansion, "git commit");
     }
 
     #[test]
     fn test_parse_fish_abbr_global() {
-        let (_, _, global) = parse_fish_abbr("abbr -a -g NE '2>/dev/null'").unwrap();
-        assert!(global);
+        let attrs = parse_fish_abbr("abbr -a -g NE '2>/dev/null'").unwrap();
+        assert!(attrs.is_global);
     }
 
     #[test]
     fn test_parse_fish_abbr_with_command_flag() {
-        // --command takes a value; should not misparse
-        let (name, value, _) = parse_fish_abbr("abbr -a --command git co checkout").unwrap();
-        assert_eq!(name, "co");
-        assert_eq!(value, "checkout");
+        // --command takes a value; should be preserved
+        let attrs = parse_fish_abbr("abbr -a --command git co checkout").unwrap();
+        assert_eq!(attrs.name, "co");
+        assert_eq!(attrs.expansion, "checkout");
+        assert_eq!(attrs.command, Some("git".to_string()));
     }
 
     #[test]
     fn test_parse_fish_abbr_with_position_flag() {
-        let (name, value, _) = parse_fish_abbr("abbr -a --position anywhere NE '2>/dev/null'").unwrap();
-        assert_eq!(name, "NE");
-        assert_eq!(value, "2>/dev/null");
+        let attrs = parse_fish_abbr("abbr -a --position anywhere NE '2>/dev/null'").unwrap();
+        assert_eq!(attrs.name, "NE");
+        assert_eq!(attrs.expansion, "2>/dev/null");
+        assert!(attrs.is_global);
+    }
+
+    #[test]
+    fn test_parse_fish_abbr_with_function_flag() {
+        let attrs = parse_fish_abbr("abbr -a -f mf my_func").unwrap();
+        assert_eq!(attrs.name, "mf");
+        assert_eq!(attrs.expansion, "my_func");
+        assert!(attrs.is_function);
+    }
+
+    #[test]
+    fn test_parse_fish_abbr_with_regex_flag() {
+        let attrs = parse_fish_abbr("abbr -a --regex '^gc$' 'git commit'").unwrap();
+        assert_eq!(attrs.name, "^gc$");
+        assert!(attrs.is_regex);
+    }
+
+    #[test]
+    fn test_parse_fish_abbr_command_with_function() {
+        // fish allows --command + --function together
+        let attrs = parse_fish_abbr("abbr -a --command git -f co checkout").unwrap();
+        assert_eq!(attrs.name, "co");
+        assert_eq!(attrs.expansion, "checkout");
+        assert_eq!(attrs.command, Some("git".to_string()));
+        assert!(attrs.is_function);
     }
 
     #[test]
@@ -428,6 +504,49 @@ global = true
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("kort add "));
         assert!(lines[1].contains("--global"));
+    }
+
+    #[test]
+    fn test_import_fish_preserves_command_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = setup_config(&dir);
+
+        let fish_content = "abbr -a --command git co checkout\n";
+        let result = import_fish(fish_content, &path).unwrap();
+        assert_eq!(result.imported, 1);
+
+        let cfg = config::load(&path).unwrap();
+        assert_eq!(cfg.abbr[0].keyword, "co");
+        assert_eq!(cfg.abbr[0].expansion, "checkout");
+        assert_eq!(cfg.abbr[0].command, Some("git".to_string()));
+    }
+
+    #[test]
+    fn test_import_fish_preserves_function_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = setup_config(&dir);
+
+        let fish_content = "abbr -a -f mf my_func\n";
+        let result = import_fish(fish_content, &path).unwrap();
+        assert_eq!(result.imported, 1);
+
+        let cfg = config::load(&path).unwrap();
+        assert_eq!(cfg.abbr[0].keyword, "mf");
+        assert!(cfg.abbr[0].function);
+    }
+
+    #[test]
+    fn test_import_fish_preserves_regex_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = setup_config(&dir);
+
+        let fish_content = "abbr -a --regex '^gc$' 'git commit'\n";
+        let result = import_fish(fish_content, &path).unwrap();
+        assert_eq!(result.imported, 1);
+
+        let cfg = config::load(&path).unwrap();
+        assert_eq!(cfg.abbr[0].keyword, "^gc$");
+        assert!(cfg.abbr[0].regex);
     }
 
     #[test]

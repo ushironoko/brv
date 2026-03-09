@@ -22,12 +22,20 @@ pub struct AddParams {
 
 /// Append a new abbreviation entry to the config file
 pub fn append_to_config(path: &Path, params: &AddParams) -> Result<()> {
-    // Validate the new entry by constructing a minimal TOML and parsing it
+    // Validate the new entry fields before touching the file
     validate_params(params)?;
 
+    // Read existing content (or empty string for new file)
+    let existing_content = if path.exists() {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read config file: {}", path.display()))?
+    } else {
+        String::new()
+    };
+
     // Check for duplicate keywords in existing config
-    if path.exists() {
-        let existing = config::load(path)?;
+    if !existing_content.is_empty() {
+        let existing = config::parse(&existing_content)?;
         if let Some(dup) = existing.abbr.iter().find(|a| a.keyword == params.keyword) {
             // If it has exactly the same context, it's a duplicate
             let new_has_context = params.context_lbuffer.is_some() || params.context_rbuffer.is_some();
@@ -44,25 +52,28 @@ pub fn append_to_config(path: &Path, params: &AddParams) -> Result<()> {
 
     let entry = build_toml_entry(params);
 
-    // Append to file
+    // Build the combined content and validate BEFORE writing to disk
+    let mut combined = existing_content.clone();
+    if !combined.is_empty() && !combined.ends_with('\n') {
+        combined.push('\n');
+    }
+    combined.push_str(&entry);
+
+    config::parse(&combined)
+        .with_context(|| "config validation failed: the new entry is invalid")?;
+
+    // Validation passed — now write to disk
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .with_context(|| format!("failed to open config file: {}", path.display()))?;
 
-    // Ensure we start on a new line
-    if path.exists() {
-        let content = std::fs::read_to_string(path)?;
-        if !content.is_empty() && !content.ends_with('\n') {
-            writeln!(file)?;
-        }
+    if !existing_content.is_empty() && !existing_content.ends_with('\n') {
+        writeln!(file)?;
     }
 
     write!(file, "{}", entry)?;
-
-    // Verify the whole config is still valid after appending
-    config::load(path).with_context(|| "config validation failed after adding abbreviation")?;
 
     Ok(())
 }
@@ -76,6 +87,27 @@ fn validate_params(params: &AddParams) -> Result<()> {
     }
     if params.expansion.is_empty() {
         anyhow::bail!("expansion must not be empty");
+    }
+    // Mutual exclusion checks (same rules as config::validate)
+    if params.function && params.evaluate {
+        anyhow::bail!(
+            "keyword \"{}\" cannot have both function and evaluate",
+            params.keyword
+        );
+    }
+    if params.command.is_some() && params.global {
+        anyhow::bail!(
+            "keyword \"{}\" cannot have both command and global",
+            params.keyword
+        );
+    }
+    if params.regex {
+        regex::Regex::new(&params.keyword).with_context(|| {
+            format!(
+                "keyword \"{}\" has regex = true but invalid regex pattern",
+                params.keyword
+            )
+        })?;
     }
     if let Some(ref pat) = params.context_lbuffer {
         regex::Regex::new(pat)
@@ -610,5 +642,64 @@ expansion = "git"
 
         let config = config::parse(&content).unwrap();
         assert!(config.abbr[0].context.is_some());
+    }
+
+    #[test]
+    fn test_append_to_config_invalid_entry_does_not_corrupt_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kort.toml");
+
+        let initial = "[settings]\nstrict = false\n";
+        std::fs::write(&path, initial).unwrap();
+
+        // function + evaluate is invalid (mutually exclusive)
+        let params = AddParams {
+            keyword: "x".to_string(),
+            expansion: "y".to_string(),
+            global: false,
+            evaluate: true,
+            function: true,
+            regex: false,
+            command: None,
+            allow_conflict: false,
+            context_lbuffer: None,
+            context_rbuffer: None,
+        };
+
+        let err = append_to_config(&path, &params);
+        assert!(err.is_err());
+
+        // File should remain unchanged
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, initial);
+    }
+
+    #[test]
+    fn test_append_to_config_command_and_global_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kort.toml");
+
+        let initial = "[settings]\nstrict = false\n";
+        std::fs::write(&path, initial).unwrap();
+
+        let params = AddParams {
+            keyword: "co".to_string(),
+            expansion: "checkout".to_string(),
+            global: true,
+            evaluate: false,
+            function: false,
+            regex: false,
+            command: Some("git".to_string()),
+            allow_conflict: false,
+            context_lbuffer: None,
+            context_rbuffer: None,
+        };
+
+        let err = append_to_config(&path, &params);
+        assert!(err.is_err());
+
+        // File should remain unchanged
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, initial);
     }
 }
