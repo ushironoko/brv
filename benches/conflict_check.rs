@@ -1,5 +1,5 @@
-use brv::config::Abbreviation;
-use brv::conflict;
+use kort::config::Abbreviation;
+use kort::conflict;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::path::PathBuf;
 

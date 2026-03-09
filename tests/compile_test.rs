@@ -2,12 +2,12 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-fn brv_cmd() -> Command {
-    Command::cargo_bin("brv").unwrap()
+fn kort_cmd() -> Command {
+    Command::cargo_bin("kort").unwrap()
 }
 
 fn create_config(dir: &TempDir, content: &str) -> std::path::PathBuf {
-    let config_path = dir.path().join("brv.toml");
+    let config_path = dir.path().join("kort.toml");
     std::fs::write(&config_path, content).unwrap();
     config_path
 }
@@ -28,7 +28,7 @@ expansion = "git commit"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args(["compile", "--config", config_path.to_str().unwrap()])
         .env("XDG_CACHE_HOME", dir.path().join("cache"))
         .assert()
@@ -48,7 +48,7 @@ expansion = "custom_cd"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args(["compile", "--config", config_path.to_str().unwrap()])
         .env("XDG_CACHE_HOME", dir.path().join("cache"))
         .assert()
@@ -69,7 +69,7 @@ allow_conflict = true
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args(["compile", "--config", config_path.to_str().unwrap()])
         .env("XDG_CACHE_HOME", dir.path().join("cache"))
         .assert()
@@ -88,21 +88,21 @@ expansion = "git"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args(["compile", "--config", config_path.to_str().unwrap()])
         .env("XDG_CACHE_HOME", dir.path().join("cache"))
         .assert()
         .success();
 
     // Verify cache file was generated
-    let cache_dir = dir.path().join("cache").join("brv");
-    assert!(cache_dir.join("brv.cache").exists());
+    let cache_dir = dir.path().join("cache").join("kort");
+    assert!(cache_dir.join("kort.cache").exists());
 }
 
 #[test]
 fn test_compile_missing_config() {
-    brv_cmd()
-        .args(["compile", "--config", "/nonexistent/brv.toml"])
+    kort_cmd()
+        .args(["compile", "--config", "/nonexistent/kort.toml"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("not found"));

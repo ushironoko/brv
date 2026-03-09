@@ -1,8 +1,8 @@
-# brv
+# kort
 
 Fast and safe abbreviation expansion for zsh.
 
-brv pre-validates your abbreviations at compile time — catching conflicts with existing commands before they cause problems — then uses a binary cache for instant expansion at runtime.
+kort pre-validates your abbreviations at compile time — catching conflicts with existing commands before they cause problems — then uses a binary cache for instant expansion at runtime.
 
 ## Installation
 
@@ -17,26 +17,26 @@ cargo install --path .
 1. Generate a config file:
 
 ```bash
-brv init
+kort init
 ```
 
-This creates `~/.config/brv/brv.toml`.
+This creates `~/.config/kort/kort.toml`.
 
 2. Source the zsh integration in your `.zshrc`:
 
 ```bash
-source /path/to/brv/shells/zsh/brv.zsh
+source /path/to/kort/shells/zsh/kort.zsh
 ```
 
 3. Compile your config:
 
 ```bash
-brv compile
+kort compile
 ```
 
 ## Configuration
 
-Edit `~/.config/brv/brv.toml` to define your abbreviations.
+Edit `~/.config/kort/kort.toml` to define your abbreviations.
 
 ### Regular Abbreviations
 
@@ -115,7 +115,7 @@ strict = false  # treat suffix conflicts as errors (default: false)
 
 ## Conflict Detection
 
-When you run `brv compile`, brv scans your `$PATH` and checks zsh builtins to detect abbreviations that shadow existing commands.
+When you run `kort compile`, kort scans your `$PATH` and checks zsh builtins to detect abbreviations that shadow existing commands.
 
 | Conflict Type | Default Behavior |
 |---|---|
@@ -144,16 +144,16 @@ The zsh integration sets up three key bindings:
 
 ## Adding Abbreviations from the CLI
 
-Instead of editing `brv.toml` by hand, you can use `brv add`:
+Instead of editing `kort.toml` by hand, you can use `kort add`:
 
 ### Non-interactive
 
 ```bash
-brv add g "git"
-brv add gc "git commit -m '{{message}}'" --global
-brv add main "main --branch" --context-lbuffer "^git (checkout|switch) "
-brv add TODAY "date +%Y-%m-%d" --evaluate --global
-brv add gs "git status --short" --allow-conflict
+kort add g "git"
+kort add gc "git commit -m '{{message}}'" --global
+kort add main "main --branch" --context-lbuffer "^git (checkout|switch) "
+kort add TODAY "date +%Y-%m-%d" --evaluate --global
+kort add gs "git status --short" --allow-conflict
 ```
 
 | Flag | Description |
@@ -167,10 +167,10 @@ brv add gs "git status --short" --allow-conflict
 
 ### Interactive
 
-Run `brv add` without arguments to enter interactive mode:
+Run `kort add` without arguments to enter interactive mode:
 
 ```bash
-brv add
+kort add
 ```
 
 You will be prompted for the keyword, expansion, type (regular / global / context), and other options.
@@ -179,19 +179,19 @@ You will be prompted for the keyword, expansion, type (regular / global / contex
 
 | Command | Description |
 |---|---|
-| `brv init` | Generate a config template at `~/.config/brv/brv.toml` |
-| `brv add` | Add an abbreviation interactively |
-| `brv add <keyword> <expansion>` | Add an abbreviation with options |
-| `brv compile` | Validate config, detect conflicts, and generate binary cache |
-| `brv compile --strict` | Treat suffix conflicts as errors |
-| `brv check` | Validate config syntax without compiling |
-| `brv list` | Show all registered abbreviations |
-| `brv expand` | Expand an abbreviation (called by the zsh widget) |
-| `brv next-placeholder` | Jump to next placeholder (called by the zsh widget) |
+| `kort init` | Generate a config template at `~/.config/kort/kort.toml` |
+| `kort add` | Add an abbreviation interactively |
+| `kort add <keyword> <expansion>` | Add an abbreviation with options |
+| `kort compile` | Validate config, detect conflicts, and generate binary cache |
+| `kort compile --strict` | Treat suffix conflicts as errors |
+| `kort check` | Validate config syntax without compiling |
+| `kort list` | Show all registered abbreviations |
+| `kort expand` | Expand an abbreviation (called by the zsh widget) |
+| `kort next-placeholder` | Jump to next placeholder (called by the zsh widget) |
 
 ## Auto-Recompilation
 
-When you edit `brv.toml`, the next expansion automatically detects the stale cache and recompiles. No manual `brv compile` needed after config changes.
+When you edit `kort.toml`, the next expansion automatically detects the stale cache and recompiles. No manual `kort compile` needed after config changes.
 
 ## License
 

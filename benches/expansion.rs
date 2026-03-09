@@ -1,6 +1,6 @@
-use brv::config::Abbreviation;
-use brv::expand::{expand, ExpandInput};
-use brv::matcher;
+use kort::config::Abbreviation;
+use kort::expand::{expand, ExpandInput};
+use kort::matcher;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 fn generate_abbreviations(count: usize) -> Vec<Abbreviation> {

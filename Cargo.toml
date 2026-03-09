@@ -1,18 +1,18 @@
 [package]
-name = "brv"
+name = "kort"
 version = "0.1.0"
 edition = "2021"
 authors = ["ushironoko"]
 description = "Fast and safe abbreviation expansion for zsh"
 license = "MIT"
-repository = "https://github.com/ushironoko/brv"
+repository = "https://github.com/ushironoko/kort"
 
 [[bin]]
-name = "brv"
+name = "kort"
 path = "src/main.rs"
 
 [lib]
-name = "brv"
+name = "kort"
 path = "src/lib.rs"
 
 [dependencies]

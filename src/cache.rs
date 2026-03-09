@@ -83,7 +83,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_config(dir: &TempDir) -> std::path::PathBuf {
-        let config_path = dir.path().join("brv.toml");
+        let config_path = dir.path().join("kort.toml");
         std::fs::write(
             &config_path,
             r#"
@@ -111,7 +111,7 @@ expansion = "git"
     fn test_write_and_read_roundtrip() {
         let dir = TempDir::new().unwrap();
         let config_path = create_test_config(&dir);
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
 
         let matcher = Matcher::new();
         write(&cache_path, &matcher, &config_path).unwrap();
@@ -127,7 +127,7 @@ expansion = "git"
     fn test_is_fresh_true() {
         let dir = TempDir::new().unwrap();
         let config_path = create_test_config(&dir);
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
 
         let matcher = Matcher::new();
         write(&cache_path, &matcher, &config_path).unwrap();
@@ -140,7 +140,7 @@ expansion = "git"
     fn test_is_fresh_false_after_config_change() {
         let dir = TempDir::new().unwrap();
         let config_path = create_test_config(&dir);
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
 
         let matcher = Matcher::new();
         write(&cache_path, &matcher, &config_path).unwrap();
@@ -162,14 +162,14 @@ expansion = "git commit"
 
     #[test]
     fn test_read_nonexistent_cache() {
-        let result = read(Path::new("/nonexistent/brv.cache"));
+        let result = read(Path::new("/nonexistent/kort.cache"));
         assert!(result.is_err());
     }
 
     #[test]
     fn test_read_corrupted_cache() {
         let dir = TempDir::new().unwrap();
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
         std::fs::write(&cache_path, b"corrupted data").unwrap();
 
         let result = read(&cache_path);
@@ -180,7 +180,7 @@ expansion = "git commit"
     fn test_write_creates_parent_directories() {
         let dir = TempDir::new().unwrap();
         let config_path = create_test_config(&dir);
-        let cache_path = dir.path().join("nested").join("dir").join("brv.cache");
+        let cache_path = dir.path().join("nested").join("dir").join("kort.cache");
 
         let matcher = Matcher::new();
         let result = write(&cache_path, &matcher, &config_path);

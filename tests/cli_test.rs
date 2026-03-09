@@ -2,19 +2,19 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-fn brv_cmd() -> Command {
-    Command::cargo_bin("brv").unwrap()
+fn kort_cmd() -> Command {
+    Command::cargo_bin("kort").unwrap()
 }
 
 fn create_config(dir: &TempDir, content: &str) -> std::path::PathBuf {
-    let config_path = dir.path().join("brv.toml");
+    let config_path = dir.path().join("kort.toml");
     std::fs::write(&config_path, content).unwrap();
     config_path
 }
 
 #[test]
 fn test_help() {
-    brv_cmd()
+    kort_cmd()
         .arg("--help")
         .assert()
         .success()
@@ -23,11 +23,11 @@ fn test_help() {
 
 #[test]
 fn test_version() {
-    brv_cmd()
+    kort_cmd()
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("brv"));
+        .stdout(predicate::str::contains("kort"));
 }
 
 #[test]
@@ -42,7 +42,7 @@ expansion = "git"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args(["check", "--config", config_path.to_str().unwrap()])
         .assert()
         .success()
@@ -61,7 +61,7 @@ expansion = "git"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args(["check", "--config", config_path.to_str().unwrap()])
         .assert()
         .failure();
@@ -69,8 +69,8 @@ expansion = "git"
 
 #[test]
 fn test_check_missing_config() {
-    brv_cmd()
-        .args(["check", "--config", "/nonexistent/brv.toml"])
+    kort_cmd()
+        .args(["check", "--config", "/nonexistent/kort.toml"])
         .assert()
         .failure();
 }
@@ -92,7 +92,7 @@ global = true
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args(["list", "--config", config_path.to_str().unwrap()])
         .assert()
         .success()
@@ -112,7 +112,7 @@ strict = false
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "add",
             "g",
@@ -139,7 +139,7 @@ strict = false
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "add",
             "NE",
@@ -165,7 +165,7 @@ strict = false
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "add",
             "main",
@@ -193,7 +193,7 @@ expansion = "git"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "add",
             "g",
@@ -211,7 +211,7 @@ fn test_add_missing_expansion_error() {
     let dir = TempDir::new().unwrap();
     let config_path = create_config(&dir, "[settings]\nstrict = false\n");
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "add",
             "g",
@@ -224,8 +224,8 @@ fn test_add_missing_expansion_error() {
 
 #[test]
 fn test_add_missing_config() {
-    brv_cmd()
-        .args(["add", "g", "git", "--config", "/nonexistent/brv.toml"])
+    kort_cmd()
+        .args(["add", "g", "git", "--config", "/nonexistent/kort.toml"])
         .assert()
         .failure();
 }
@@ -235,7 +235,7 @@ fn test_list_empty() {
     let dir = TempDir::new().unwrap();
     let config_path = create_config(&dir, "");
 
-    brv_cmd()
+    kort_cmd()
         .args(["list", "--config", config_path.to_str().unwrap()])
         .assert()
         .success()

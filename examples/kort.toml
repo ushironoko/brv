@@ -1,5 +1,5 @@
-# brv configuration example
-# Place this file at: ~/.config/brv/brv.toml
+# kort configuration example
+# Place this file at: ~/.config/kort/kort.toml
 
 [settings]
 strict = false  # true: treat suffix conflicts as errors

@@ -9,7 +9,7 @@ pub struct CompileResult {
     pub abbr_count: usize,
 }
 
-/// Main flow of brv compile
+/// Main flow of kort compile
 pub fn compile(config_path: &Path, output_path: &Path, strict: bool) -> Result<CompileResult> {
     // 1. Parse TOML
     let cfg = config::load(config_path)?;
@@ -62,7 +62,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn write_config(dir: &TempDir, content: &str) -> std::path::PathBuf {
-        let config_path = dir.path().join("brv.toml");
+        let config_path = dir.path().join("kort.toml");
         std::fs::write(&config_path, content).unwrap();
         config_path
     }
@@ -82,7 +82,7 @@ keyword = "gc"
 expansion = "git commit"
 "#,
         );
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
 
         let result = compile(&config_path, &cache_path, false).unwrap();
         assert_eq!(result.abbr_count, 2);
@@ -100,7 +100,7 @@ keyword = "cd"
 expansion = "custom_cd"
 "#,
         );
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
 
         let result = compile(&config_path, &cache_path, false);
         assert!(result.is_err());
@@ -121,7 +121,7 @@ expansion = "custom_cd"
 allow_conflict = true
 "#,
         );
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
 
         let result = compile(&config_path, &cache_path, false);
         assert!(result.is_ok());
@@ -172,7 +172,7 @@ keyword = "xyzzy"
 expansion = "some command"
 "#,
         );
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
 
         let result = compile(&config_path, &cache_path, false);
         assert!(result.is_ok());

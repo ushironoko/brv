@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn test_append_to_config_new_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("brv.toml");
+        let path = dir.path().join("kort.toml");
 
         // Create a minimal config first
         std::fs::write(&path, "[settings]\nstrict = false\n").unwrap();
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn test_append_to_config_duplicate_keyword() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("brv.toml");
+        let path = dir.path().join("kort.toml");
 
         let initial = r#"[settings]
 strict = false
@@ -510,7 +510,7 @@ expansion = "git"
     #[test]
     fn test_append_to_config_global_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("brv.toml");
+        let path = dir.path().join("kort.toml");
 
         std::fs::write(&path, "[settings]\nstrict = false\n").unwrap();
 
@@ -535,7 +535,7 @@ expansion = "git"
     #[test]
     fn test_append_to_config_context_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("brv.toml");
+        let path = dir.path().join("kort.toml");
 
         std::fs::write(&path, "[settings]\nstrict = false\n").unwrap();
 

@@ -1,11 +1,11 @@
-# brv - Fast and safe abbreviation expansion for zsh
+# kort - Fast and safe abbreviation expansion for zsh
 # Source this file in your .zshrc:
-#   source /path/to/brv.zsh
+#   source /path/to/kort.zsh
 
 # Expand abbreviation on Space key
-brv-expand-space() {
+kort-expand-space() {
   local -a out
-  out=( "${(f)$(brv expand --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
+  out=( "${(f)$(kort expand --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
 
   case $out[1] in
     success)
@@ -29,9 +29,9 @@ brv-expand-space() {
       ;;
     stale_cache)
       # Recompile if cache is stale
-      brv compile 2>/dev/null
+      kort compile 2>/dev/null
       # Retry
-      out=( "${(f)$(brv expand --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
+      out=( "${(f)$(kort expand --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
       if [[ $out[1] == "success" && -n $out[2] ]]; then
         BUFFER=$out[2]
         CURSOR=$out[3]
@@ -46,9 +46,9 @@ brv-expand-space() {
 }
 
 # Expand abbreviation on Enter key and execute
-brv-expand-accept() {
+kort-expand-accept() {
   local -a out
-  out=( "${(f)$(brv expand --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
+  out=( "${(f)$(kort expand --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
 
   case $out[1] in
     success)
@@ -64,8 +64,8 @@ brv-expand-accept() {
       fi
       ;;
     stale_cache)
-      brv compile 2>/dev/null
-      out=( "${(f)$(brv expand --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
+      kort compile 2>/dev/null
+      out=( "${(f)$(kort expand --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
       if [[ $out[1] == "success" && -n $out[2] ]]; then
         BUFFER=$out[2]
       fi
@@ -76,9 +76,9 @@ brv-expand-accept() {
 }
 
 # Jump to next placeholder on Tab key
-brv-next-placeholder() {
+kort-next-placeholder() {
   local -a out
-  out=( "${(f)$(brv next-placeholder --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
+  out=( "${(f)$(kort next-placeholder --lbuffer="$LBUFFER" --rbuffer="$RBUFFER")}" )
   if [[ $out[1] == "success" && -n $out[2] ]]; then
     BUFFER=$out[2]
     CURSOR=$out[3]
@@ -89,11 +89,11 @@ brv-next-placeholder() {
 }
 
 # Register widgets
-zle -N brv-expand-space
-zle -N brv-expand-accept
-zle -N brv-next-placeholder
+zle -N kort-expand-space
+zle -N kort-expand-accept
+zle -N kort-next-placeholder
 
 # Key bindings
-bindkey " " brv-expand-space
-bindkey "^M" brv-expand-accept
-bindkey "^I" brv-next-placeholder
+bindkey " " kort-expand-space
+bindkey "^M" kort-expand-accept
+bindkey "^I" kort-next-placeholder

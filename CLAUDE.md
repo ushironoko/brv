@@ -1,52 +1,61 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project Overview
 
-brv (brevis = ラテン語で「短い」) は Rust 製の高速・安全な zsh abbreviation 展開ツール。
-`brv compile` による事前検証 + バイナリキャッシュで、パフォーマンスと安全性の両方を解決する。
+kort (from Swedish/Dutch "kort" = short) is a fast, safe zsh abbreviation expansion tool written in Rust.
+It uses a compile-then-expand architecture: `kort compile` validates abbreviations against PATH commands and zsh builtins, then generates a binary cache (bitcode). `kort expand` reads the cache for O(1) HashMap lookup at runtime.
 
 ## Build & Development Commands
 
 ```bash
-cargo build
-cargo build --release
-cargo test
-cargo test <test_name>
-cargo bench
+cargo build                  # Debug build
+cargo build --release        # Release build (strip + LTO)
+cargo test                   # Run all unit + integration tests
+cargo test <test_name>       # Run a single test
+cargo bench                  # Run criterion benchmarks
 ```
 
 ## Architecture
 
+Two-phase design: **compile** (offline validation + cache generation) and **expand** (runtime lookup from cache).
+
 ```
-brv.toml (TOML設定)
-    │
-    ▼
-brv compile ─── PATH スキャン + シェルビルトイン照合 ─── 衝突検出 → エラー or 警告
-    │
-    ▼
-brv.cache (バイナリキャッシュ: bitcode)
-    │
-    ▼
-brv expand ─── キャッシュ読み込み → HashMap ルックアップ → 結果出力
-    │
-    ▼
-ZLE ウィジェット ─── $BUFFER/$CURSOR 書き換え
+kort.toml → kort compile → conflict detection → kort.cache (bitcode)
+                                                        ↓
+                ZLE widget ← stdout protocol ← kort expand (HashMap lookup)
 ```
 
-## Module Structure
+### Expansion priority
 
-- **main.rs**: clap CLI エントリポイント
-- **lib.rs**: ライブラリクレート (テスト・ベンチ用)
-- **config.rs**: TOML 設定パース
-- **compiler.rs**: brv compile: 検証 + キャッシュ生成
-- **conflict.rs**: 衝突検出エンジン (PATH スキャン, ビルトイン照合)
-- **matcher.rs**: HashMap ベースのマッチングエンジン
-- **expand.rs**: 展開ロジック (トークナイズ → ルックアップ → 結果)
-- **placeholder.rs**: {{placeholder}} 処理
-- **context.rs**: lbuffer/rbuffer 正規表現コンテキスト判定
-- **cache.rs**: バイナリキャッシュ読み書き (bitcode)
-- **output.rs**: ZLE 向け出力フォーマット
+Contextual (regex match) > Regular (command position only) > Global (any position).
+
+### ZLE output protocol
+
+kort communicates with the zsh widget (`shells/zsh/kort.zsh`) via a line-based stdout protocol:
+- `success\n{buffer}\n{cursor}` — expanded text with cursor position
+- `evaluate\n{command}\n{prefix}\n{rbuffer}` — shell eval required
+- `stale_cache` — triggers auto-recompile in widget
+- `no_match` — fallback to normal key behavior
+
+### Cache freshness
+
+Cache stores a hash of config file content. `kort expand` checks freshness on every invocation; if stale, returns `stale_cache` and the zsh widget runs `kort compile` then retries.
+
+## Module Responsibilities
+
+- **main.rs** — CLI entry point (clap). All subcommand handlers live here.
+- **compiler.rs** — Orchestrates the compile pipeline: config parse → PATH scan → conflict detect → matcher build → cache write.
+- **conflict.rs** — PATH scanning, zsh builtin list (~70 commands), three conflict types (exact/suffix/builtin).
+- **matcher.rs** — `Matcher` struct with `FxHashMap<String, Vec<CompiledAbbr>>` for regular/global, `Vec<CompiledAbbr>` for contextual.
+- **expand.rs** — Keyword extraction from lbuffer, command position detection, lookup priority chain.
+- **context.rs** — Regex-based lbuffer/rbuffer context matching for contextual abbreviations.
+- **placeholder.rs** — `{{name}}` placeholder removal and cursor positioning.
+- **cache.rs** — bitcode serialize/deserialize with version check (current: v2).
+- **output.rs** — `ExpandOutput` / `PlaceholderOutput` enums with `Display` impl for the stdout protocol.
+- **config.rs** — TOML deserialization, validation rules, XDG path resolution.
 
 ## Dependency Version Policy
 
-Cargo.toml での依存クレートは必ず正確なバージョンを指定する。
+Always specify exact versions in Cargo.toml (no `^` or `*`).

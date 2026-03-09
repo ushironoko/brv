@@ -92,14 +92,14 @@ fn validate(config: &Config) -> Result<()> {
 
 /// Get the default config file path
 pub fn default_config_path() -> Result<std::path::PathBuf> {
-    let xdg = xdg::BaseDirectories::with_prefix("brv").context("failed to get XDG directories")?;
-    Ok(xdg.get_config_home().join("brv.toml"))
+    let xdg = xdg::BaseDirectories::with_prefix("kort").context("failed to get XDG directories")?;
+    Ok(xdg.get_config_home().join("kort.toml"))
 }
 
 /// Get the default cache file path
 pub fn default_cache_path() -> Result<std::path::PathBuf> {
-    let xdg = xdg::BaseDirectories::with_prefix("brv").context("failed to get XDG directories")?;
-    Ok(xdg.get_cache_home().join("brv.cache"))
+    let xdg = xdg::BaseDirectories::with_prefix("kort").context("failed to get XDG directories")?;
+    Ok(xdg.get_cache_home().join("kort.cache"))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
-use brv::cache;
-use brv::config;
-use brv::matcher;
+use kort::cache;
+use kort::config;
+use kort::matcher;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tempfile::TempDir;
 
@@ -34,12 +34,12 @@ fn bench_cache_read(c: &mut Criterion) {
     for size in [10, 100, 500] {
         let dir = TempDir::new().unwrap();
         let toml = generate_toml(size);
-        let config_path = dir.path().join("brv.toml");
+        let config_path = dir.path().join("kort.toml");
         std::fs::write(&config_path, &toml).unwrap();
 
         let cfg = config::parse(&toml).unwrap();
         let m = matcher::build(&cfg.abbr);
-        let cache_path = dir.path().join("brv.cache");
+        let cache_path = dir.path().join("kort.cache");
         cache::write(&cache_path, &m, &config_path).unwrap();
 
         group.bench_with_input(BenchmarkId::new("bitcode", size), &cache_path, |b, path| {

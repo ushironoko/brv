@@ -2,23 +2,23 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-fn brv_cmd() -> Command {
-    Command::cargo_bin("brv").unwrap()
+fn kort_cmd() -> Command {
+    Command::cargo_bin("kort").unwrap()
 }
 
 fn setup_compiled(dir: &TempDir, config_content: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    let config_path = dir.path().join("brv.toml");
+    let config_path = dir.path().join("kort.toml");
     std::fs::write(&config_path, config_content).unwrap();
 
     // Compile
-    Command::cargo_bin("brv")
+    Command::cargo_bin("kort")
         .unwrap()
         .args(["compile", "--config", config_path.to_str().unwrap()])
         .env("XDG_CACHE_HOME", dir.path().join("cache"))
         .assert()
         .success();
 
-    let cache_path = dir.path().join("cache").join("brv").join("brv.cache");
+    let cache_path = dir.path().join("cache").join("kort").join("kort.cache");
     (config_path, cache_path)
 }
 
@@ -34,7 +34,7 @@ expansion = "git"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "expand",
             "--lbuffer",
@@ -64,7 +64,7 @@ expansion = "git"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "expand",
             "--lbuffer",
@@ -94,7 +94,7 @@ global = true
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "expand",
             "--lbuffer",
@@ -124,7 +124,7 @@ expansion = "git commit -m '{{message}}'"
 "#,
     );
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "expand",
             "--lbuffer",
@@ -169,7 +169,7 @@ expansion = "git commit"
     )
     .unwrap();
 
-    brv_cmd()
+    kort_cmd()
         .args([
             "expand",
             "--lbuffer",
@@ -188,7 +188,7 @@ expansion = "git commit"
 
 #[test]
 fn test_expand_missing_cache() {
-    brv_cmd()
+    kort_cmd()
         .args([
             "expand",
             "--lbuffer",
@@ -196,7 +196,7 @@ fn test_expand_missing_cache() {
             "--rbuffer",
             "",
             "--cache",
-            "/nonexistent/brv.cache",
+            "/nonexistent/kort.cache",
         ])
         .assert()
         .success()
@@ -205,7 +205,7 @@ fn test_expand_missing_cache() {
 
 #[test]
 fn test_next_placeholder() {
-    brv_cmd()
+    kort_cmd()
         .args([
             "next-placeholder",
             "--lbuffer",
@@ -220,7 +220,7 @@ fn test_next_placeholder() {
 
 #[test]
 fn test_next_placeholder_none() {
-    brv_cmd()
+    kort_cmd()
         .args([
             "next-placeholder",
             "--lbuffer",

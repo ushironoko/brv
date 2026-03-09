@@ -2,10 +2,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use brv::{add, cache, compiler, config, expand, output, placeholder};
+use kort::{add, cache, compiler, config, expand, output, placeholder};
 
 #[derive(Parser, Debug)]
-#[command(name = "brv")]
+#[command(name = "kort")]
 #[command(about = "Fast and safe abbreviation expansion for zsh")]
 #[command(version)]
 struct Args {
@@ -157,7 +157,7 @@ fn cmd_compile(strict: bool, cfg: Option<PathBuf>) -> Result<()> {
 
     if !config_path.exists() {
         anyhow::bail!(
-            "config file not found: {}\nrun `brv init` to generate a template",
+            "config file not found: {}\nrun `kort init` to generate a template",
             config_path.display()
         );
     }
@@ -245,7 +245,7 @@ fn cmd_list(cfg: Option<PathBuf>) -> Result<()> {
 
     if !config_path.exists() {
         anyhow::bail!(
-            "config file not found: {}\nrun `brv init` to generate a template",
+            "config file not found: {}\nrun `kort init` to generate a template",
             config_path.display()
         );
     }
@@ -301,7 +301,7 @@ fn cmd_check(cfg: Option<PathBuf>) -> Result<()> {
 
     if !config_path.exists() {
         anyhow::bail!(
-            "config file not found: {}\nrun `brv init` to generate a template",
+            "config file not found: {}\nrun `kort init` to generate a template",
             config_path.display()
         );
     }
@@ -325,7 +325,7 @@ fn cmd_add(
 
     if !config_path.exists() {
         anyhow::bail!(
-            "config file not found: {}\nrun `brv init` to generate a template",
+            "config file not found: {}\nrun `kort init` to generate a template",
             config_path.display()
         );
     }
@@ -341,11 +341,11 @@ fn cmd_add(
             context_rbuffer,
         },
         (None, None) => {
-            eprintln!("brv add - interactive mode\n");
+            eprintln!("kort add - interactive mode\n");
             add::interactive_prompt()?
         }
         _ => {
-            anyhow::bail!("both KEYWORD and EXPANSION are required for non-interactive mode\nusage: brv add <KEYWORD> <EXPANSION> [OPTIONS]\n       brv add  (interactive mode)");
+            anyhow::bail!("both KEYWORD and EXPANSION are required for non-interactive mode\nusage: kort add <KEYWORD> <EXPANSION> [OPTIONS]\n       kort add  (interactive mode)");
         }
     };
 
@@ -373,8 +373,8 @@ fn cmd_init() -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let template = r#"# brv - abbreviation configuration
-# See: https://github.com/ushironoko/brv
+    let template = r#"# kort - abbreviation configuration
+# See: https://github.com/ushironoko/kort
 
 [settings]
 strict = false  # true: treat suffix conflicts as errors
