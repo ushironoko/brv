@@ -1,6 +1,6 @@
 [package]
 name = "kort"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["ushironoko"]
 description = "Fast and safe abbreviation expansion for zsh"
