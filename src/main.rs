@@ -700,7 +700,10 @@ fn cmd_list_keywords(cfg: Option<PathBuf>) -> Result<()> {
 
     let config = config::load(&config_path)?;
     for abbr in &config.abbr {
-        println!("{}:{}", abbr.keyword, abbr.expansion);
+        // Escape colons so zsh _describe doesn't misinterpret them as separators
+        let keyword = abbr.keyword.replace(':', "\\:");
+        let expansion = abbr.expansion.replace(':', "\\:");
+        println!("{}:{}", keyword, expansion);
     }
     Ok(())
 }

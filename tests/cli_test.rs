@@ -311,6 +311,32 @@ global = true
 }
 
 #[test]
+fn test_list_keywords_escapes_colons() {
+    let dir = TempDir::new().unwrap();
+    let config_path = create_config(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g:co"
+expansion = "git checkout"
+allow_conflict = true
+
+[[abbr]]
+keyword = "ns"
+expansion = "npm run start:dev"
+"#,
+    );
+
+    kort_cmd()
+        .args(["_list-keywords", "--config", config_path.to_str().unwrap()])
+        .assert()
+        .success()
+        // Colons in keyword and expansion must be escaped for zsh _describe
+        .stdout(predicate::str::contains("g\\:co:git checkout"))
+        .stdout(predicate::str::contains("ns:npm run start\\:dev"));
+}
+
+#[test]
 fn test_list_keywords_empty_config() {
     let dir = TempDir::new().unwrap();
     let config_path = create_config(&dir, "");

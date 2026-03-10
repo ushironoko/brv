@@ -269,11 +269,22 @@ _kort() {
       if (( CURRENT == 3 )); then
         local -a sources=('aliases:Import from zsh aliases' 'fish:Import from fish' 'git-aliases:Import from git aliases')
         _describe 'source' sources
+        return
       fi
-      # import subcommands also support --config
-      _arguments -s \
-        '--config=[Config file path]:config file:_files' \
-        '*:' && return
+      # Shift words so _arguments sees the sub-subcommand as the command
+      (( CURRENT -= 2 ))
+      shift 2 words
+      case $words[1] in
+        fish)
+          _arguments -s \
+            '--config=[Config file path]:config file:_files' \
+            ':input file:_files' && return
+          ;;
+        aliases|git-aliases)
+          _arguments -s \
+            '--config=[Config file path]:config file:_files' && return
+          ;;
+      esac
       ;;
   esac
 }
