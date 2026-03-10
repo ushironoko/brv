@@ -21,7 +21,7 @@ fn setup_compiled(dir: &TempDir, config_content: &str) -> (std::path::PathBuf, s
 
 struct ServeProcess {
     child: std::process::Child,
-    stdin: std::process::ChildStdin,
+    stdin: Option<std::process::ChildStdin>,
     reader: BufReader<std::process::ChildStdout>,
 }
 
@@ -48,14 +48,15 @@ impl ServeProcess {
 
         Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             reader,
         }
     }
 
     fn send(&mut self, request: &str) -> Vec<String> {
-        writeln!(self.stdin, "{}", request).expect("failed to write to stdin");
-        self.stdin.flush().expect("failed to flush stdin");
+        let stdin = self.stdin.as_mut().expect("stdin already closed");
+        writeln!(stdin, "{}", request).expect("failed to write to stdin");
+        stdin.flush().expect("failed to flush stdin");
         self.read_response()
     }
 
@@ -76,8 +77,19 @@ impl ServeProcess {
         lines
     }
 
+    fn close_stdin(&mut self) {
+        self.stdin.take();
+    }
+
     fn close(mut self) {
-        drop(self.stdin);
+        self.stdin.take();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for ServeProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
@@ -307,8 +319,9 @@ expansion = "git"
     let response = proc.send("ping");
     assert_eq!(response, vec!["pong"]);
 
-    // Small delay to ensure mtime differs on all filesystems
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    // Ensure mtime differs — use 1s for portability across filesystems
+    // (e.g., older HFS+ has 1-second mtime granularity)
+    std::thread::sleep(std::time::Duration::from_secs(1));
 
     // Modify config without recompiling → stale
     std::fs::write(
@@ -345,7 +358,7 @@ expansion = "git"
     let mut proc = ServeProcess::start(&cache_path, &config_path);
 
     // Close stdin → should cause clean exit
-    drop(proc.stdin);
+    proc.close_stdin();
     let status = proc.child.wait().expect("failed to wait for process");
     assert!(status.success());
 }

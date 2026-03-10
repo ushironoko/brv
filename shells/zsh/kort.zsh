@@ -6,6 +6,8 @@
 
 typeset -g _KORT_COPROC_PID=0
 
+# Note: zsh coproc is a singleton — only one coproc per shell.
+# If another plugin uses coproc, it will conflict with kort.
 _kort_start_coproc() {
   _kort_stop_coproc
   coproc kort serve 2>/dev/null
@@ -42,8 +44,8 @@ _kort_request() {
     fi
   fi
 
-  # Send request
-  print -p "$request" 2>/dev/null || return 1
+  # Send request (-r: raw mode to prevent backslash escape interpretation)
+  print -rp "$request" 2>/dev/null || return 1
 
   # Read response lines until EOR (\x1e)
   local line
@@ -166,50 +168,39 @@ _kort_handle_expand_accept_response() {
 
 # --- Widget functions ---
 
-# Expand abbreviation on Space key
-kort-expand-space() {
+# Expand with stale_cache retry logic. Takes a response handler function name.
+_kort_expand_with_fallback() {
+  local handler="$1"
+
   if _kort_request "expand\t${LBUFFER}\t${RBUFFER}"; then
     if [[ ${_kort_reply[1]} == stale_cache ]]; then
       kort compile 2>/dev/null
       _kort_request "reload"
       if _kort_request "expand\t${LBUFFER}\t${RBUFFER}"; then
-        _kort_handle_expand_response "${_kort_reply[@]}"
+        "$handler" "${_kort_reply[@]}"
       else
         local -a fb
         fb=( "${(f)$(_kort_expand_fallback)}" )
-        _kort_handle_expand_response "${fb[@]}"
+        "$handler" "${fb[@]}"
       fi
     else
-      _kort_handle_expand_response "${_kort_reply[@]}"
+      "$handler" "${_kort_reply[@]}"
     fi
   else
     local -a fb
     fb=( "${(f)$(_kort_expand_fallback)}" )
-    _kort_handle_expand_response "${fb[@]}"
+    "$handler" "${fb[@]}"
   fi
+}
+
+# Expand abbreviation on Space key
+kort-expand-space() {
+  _kort_expand_with_fallback _kort_handle_expand_response
 }
 
 # Expand abbreviation on Enter key and execute
 kort-expand-accept() {
-  if _kort_request "expand\t${LBUFFER}\t${RBUFFER}"; then
-    if [[ ${_kort_reply[1]} == stale_cache ]]; then
-      kort compile 2>/dev/null
-      _kort_request "reload"
-      if _kort_request "expand\t${LBUFFER}\t${RBUFFER}"; then
-        _kort_handle_expand_accept_response "${_kort_reply[@]}"
-      else
-        local -a fb
-        fb=( "${(f)$(_kort_expand_fallback)}" )
-        _kort_handle_expand_accept_response "${fb[@]}"
-      fi
-    else
-      _kort_handle_expand_accept_response "${_kort_reply[@]}"
-    fi
-  else
-    local -a fb
-    fb=( "${(f)$(_kort_expand_fallback)}" )
-    _kort_handle_expand_accept_response "${fb[@]}"
-  fi
+  _kort_expand_with_fallback _kort_handle_expand_accept_response
 
   # Check for reminders before accepting
   if _kort_request "remind\t${BUFFER}"; then
