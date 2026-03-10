@@ -150,27 +150,6 @@ expansion = "git"
     }
 
     #[test]
-    fn test_compile_settings_strict() {
-        let dir = TempDir::new().unwrap();
-        // Succeeds in strict mode when keyword has no suffix conflict
-        let config_path = write_config(
-            &dir,
-            r#"
-[settings]
-strict = true
-
-[[abbr]]
-keyword = "xyzzy"
-expansion = "some command"
-"#,
-        );
-        let cache_path = dir.path().join("kort.cache");
-
-        let result = compile(&config_path, &cache_path);
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn test_compile_with_settings() {
         let dir = TempDir::new().unwrap();
         let config_path = write_config(

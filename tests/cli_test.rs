@@ -109,7 +109,7 @@ fn test_add_with_args() {
     let config_path = create_config(
         &dir,
         r#"[settings]
-strict = false
+
 "#,
     );
 
@@ -136,7 +136,7 @@ fn test_add_with_global_flag() {
     let config_path = create_config(
         &dir,
         r#"[settings]
-strict = false
+
 "#,
     );
 
@@ -162,7 +162,7 @@ fn test_add_with_context() {
     let config_path = create_config(
         &dir,
         r#"[settings]
-strict = false
+
 "#,
     );
 
@@ -210,7 +210,7 @@ expansion = "git"
 #[test]
 fn test_add_missing_expansion_error() {
     let dir = TempDir::new().unwrap();
-    let config_path = create_config(&dir, "[settings]\nstrict = false\n");
+    let config_path = create_config(&dir, "[settings]\n");
 
     kort_cmd()
         .args([
