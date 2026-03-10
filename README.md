@@ -4,6 +4,23 @@ Fast and safe abbreviation expansion for zsh.
 
 kort pre-validates your abbreviations at compile time — catching conflicts with existing commands before they cause problems — then uses a binary cache for instant expansion at runtime.
 
+## What's kort
+
+Traditional zsh abbreviation tools expand keywords at runtime without checking whether they collide with real commands in your `$PATH` or zsh builtins — you only discover the conflict when something breaks. They also rely on shell-script lookups that slow down linearly as your abbreviation list grows.
+
+kort takes a different approach: **compile, then expand**. Running `kort compile` scans your PATH and builtins, rejects dangerous conflicts up front, and writes a binary cache. At expansion time, kort reads that cache for O(1) HashMap lookup — or runs as a persistent coproc (`kort serve`) for sub-100 µs latency, regardless of how many abbreviations you have.
+
+## Features
+
+- **Compile-time safety** — Detects conflicts with PATH commands and zsh builtins before they cause problems
+- **Sub-100 µs expansion** — Persistent coproc mode + binary cache (bitcode) for imperceptible latency
+- **Layered expansion priority** — Contextual > Command-scoped > Regular > Global > Regex keywords > Prefix candidates
+- **Multiple expansion modes** — Replace, Evaluate (shell command output), Function call, and Placeholder (cursor positioning)
+- **Auto-recompilation** — Detects config changes automatically; no manual recompile needed
+- **Prefix candidates** — Partial keyword input shows matching abbreviations as you type
+- **Abbreviation reminders** — Notifies you when a shorter form was available for what you typed
+- **Zero-friction migration** — Import from zsh aliases, fish abbreviations, and git aliases
+
 ## Installation
 
 ### From crates.io
