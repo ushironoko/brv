@@ -1,5 +1,12 @@
 use std::fmt;
 
+/// A single candidate for prefix match display
+#[derive(Debug, Clone)]
+pub struct CandidateEntry {
+    pub keyword: String,
+    pub expansion: String,
+}
+
 /// Expansion result
 #[derive(Debug)]
 pub enum ExpandOutput {
@@ -27,6 +34,10 @@ pub enum ExpandOutput {
     },
     /// Cache is stale
     StaleCache,
+    /// Multiple prefix-match candidates found
+    Candidates {
+        candidates: Vec<CandidateEntry>,
+    },
 }
 
 impl fmt::Display for ExpandOutput {
@@ -59,6 +70,22 @@ impl fmt::Display for ExpandOutput {
             }
             ExpandOutput::StaleCache => {
                 write!(f, "stale_cache")
+            }
+            ExpandOutput::Candidates { candidates } => {
+                writeln!(f, "candidates")?;
+                writeln!(f, "{}", candidates.len())?;
+                for (i, c) in candidates.iter().enumerate() {
+                    let escaped = c
+                        .expansion
+                        .replace('\n', "\\n")
+                        .replace('\t', "\\t");
+                    if i < candidates.len() - 1 {
+                        writeln!(f, "{}\t{}", c.keyword, escaped)?;
+                    } else {
+                        write!(f, "{}\t{}", c.keyword, escaped)?;
+                    }
+                }
+                Ok(())
             }
         }
     }
@@ -94,6 +121,7 @@ impl fmt::Display for PlaceholderOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
 
     #[test]
     fn test_expand_output_success_display() {
@@ -101,14 +129,16 @@ mod tests {
             buffer: "git commit".to_string(),
             cursor: 10,
         };
-        let formatted = output.to_string();
-        assert_eq!(formatted, "success\ngit commit\n10");
+        assert_snapshot!(output.to_string(), @r"
+        success
+        git commit
+        10
+        ");
     }
 
     #[test]
     fn test_expand_output_no_match_display() {
-        let output = ExpandOutput::NoMatch;
-        assert_eq!(output.to_string(), "no_match");
+        assert_snapshot!(ExpandOutput::NoMatch.to_string(), @"no_match");
     }
 
     #[test]
@@ -118,8 +148,12 @@ mod tests {
             prefix: "echo ".to_string(),
             rbuffer: "".to_string(),
         };
-        let formatted = output.to_string();
-        assert_eq!(formatted, "evaluate\ndate +%Y-%m-%d\necho \n");
+        assert_snapshot!(output.to_string(), @r"
+        evaluate
+        date +%Y-%m-%d
+        echo
+
+        ");
     }
 
     #[test]
@@ -130,14 +164,18 @@ mod tests {
             prefix: "echo ".to_string(),
             rbuffer: "".to_string(),
         };
-        let formatted = output.to_string();
-        assert_eq!(formatted, "function\nmy_func\nmf\necho \n");
+        assert_snapshot!(output.to_string(), @r"
+        function
+        my_func
+        mf
+        echo
+
+        ");
     }
 
     #[test]
     fn test_expand_output_stale_cache_display() {
-        let output = ExpandOutput::StaleCache;
-        assert_eq!(output.to_string(), "stale_cache");
+        assert_snapshot!(ExpandOutput::StaleCache.to_string(), @"stale_cache");
     }
 
     #[test]
@@ -146,13 +184,64 @@ mod tests {
             buffer: "git commit -m ''".to_string(),
             cursor: 15,
         };
-        let formatted = output.to_string();
-        assert_eq!(formatted, "success\ngit commit -m ''\n15");
+        assert_snapshot!(output.to_string(), @r"
+        success
+        git commit -m ''
+        15
+        ");
     }
 
     #[test]
     fn test_placeholder_output_no_placeholder_display() {
-        let output = PlaceholderOutput::NoPlaceholder;
-        assert_eq!(output.to_string(), "no_placeholder");
+        assert_snapshot!(PlaceholderOutput::NoPlaceholder.to_string(), @"no_placeholder");
+    }
+
+    #[test]
+    fn test_expand_output_candidates_display() {
+        let output = ExpandOutput::Candidates {
+            candidates: vec![
+                CandidateEntry {
+                    keyword: "gc".to_string(),
+                    expansion: "git commit -m '{{message}}'".to_string(),
+                },
+                CandidateEntry {
+                    keyword: "gp".to_string(),
+                    expansion: "git push".to_string(),
+                },
+                CandidateEntry {
+                    keyword: "gd".to_string(),
+                    expansion: "git diff".to_string(),
+                },
+            ],
+        };
+        assert_snapshot!(output.to_string(), @r"
+        candidates
+        3
+        gc	git commit -m '{{message}}'
+        gp	git push
+        gd	git diff
+        ");
+    }
+
+    #[test]
+    fn test_expand_output_candidates_escape_newline_tab() {
+        let output = ExpandOutput::Candidates {
+            candidates: vec![
+                CandidateEntry {
+                    keyword: "a".to_string(),
+                    expansion: "line1\nline2".to_string(),
+                },
+                CandidateEntry {
+                    keyword: "b".to_string(),
+                    expansion: "col1\tcol2".to_string(),
+                },
+            ],
+        };
+        assert_snapshot!(output.to_string(), @r"
+        candidates
+        2
+        a	line1\nline2
+        b	col1\tcol2
+        ");
     }
 }

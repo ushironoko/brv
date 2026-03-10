@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 /// Cache format version
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 
 /// Cached settings (stored in cache for expand-time access)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -226,5 +226,50 @@ expansion = "git commit"
         let result = write(&cache_path, &matcher, &settings, &config_path);
         assert!(result.is_ok());
         assert!(cache_path.exists());
+    }
+
+    #[test]
+    fn test_prefix_index_survives_cache_roundtrip() {
+        use crate::config::Abbreviation;
+        use crate::matcher;
+
+        let dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&dir);
+        let cache_path = dir.path().join("kort.cache");
+
+        let abbrs = vec![
+            Abbreviation {
+                keyword: "gc".to_string(),
+                expansion: "git commit".to_string(),
+                ..Default::default()
+            },
+            Abbreviation {
+                keyword: "gp".to_string(),
+                expansion: "git push".to_string(),
+                ..Default::default()
+            },
+            Abbreviation {
+                keyword: "gd".to_string(),
+                expansion: "git diff".to_string(),
+                ..Default::default()
+            },
+        ];
+        let matcher = matcher::build(&abbrs);
+
+        // prefix_index should be populated before write
+        assert!(matcher.prefix_index.contains_key("g"));
+
+        let settings = CachedSettings::default();
+        write(&cache_path, &matcher, &settings, &config_path).unwrap();
+
+        let loaded = read(&cache_path).unwrap();
+
+        // prefix_index must survive serialization roundtrip
+        let g_candidates = loaded.matcher.prefix_index.get("g").unwrap();
+        assert_eq!(g_candidates, &vec!["gc".to_string(), "gd".to_string(), "gp".to_string()]);
+
+        // prefix_candidates should work on deserialized matcher
+        let candidates = matcher::prefix_candidates(&loaded.matcher, "g", true, None);
+        assert_eq!(candidates.len(), 3);
     }
 }
