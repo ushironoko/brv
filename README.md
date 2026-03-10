@@ -6,6 +6,18 @@ kort pre-validates your abbreviations at compile time — catching conflicts wit
 
 ## Installation
 
+### From crates.io
+
+```bash
+cargo install kort
+```
+
+### From GitHub Releases (via mise)
+
+```bash
+mise install github:ushironoko/kort
+```
+
 ### Build from source
 
 ```bash
