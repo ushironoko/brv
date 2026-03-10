@@ -153,6 +153,8 @@ _kort() {
   local -a subcmds
   subcmds=(
     'compile:Compile config and verify conflicts'
+    'expand:Expand abbreviation (called from ZLE)'
+    'next-placeholder:Jump to next placeholder'
     'list:List registered abbreviations'
     'check:Syntax check config only'
     'init:Initialize kort'
@@ -161,28 +163,27 @@ _kort() {
     'rename:Rename an abbreviation'
     'query:Query if abbreviation exists'
     'show:Show abbreviations'
+    'remind:Check for abbreviation reminders'
     'import:Import abbreviations'
     'export:Export abbreviations'
   )
 
-  # Extract --config value from the command line for keyword completion
-  _kort_config_flag() {
-    local i
-    for (( i=2; i < $#words; i++ )); do
-      if [[ $words[$i] == --config && -n $words[$((i+1))] ]]; then
-        echo "--config" "$words[$((i+1))]"
-        return
-      elif [[ $words[$i] == --config=* ]]; then
-        echo "--config" "${words[$i]#--config=}"
-        return
-      fi
-    done
-  }
-
   _kort_keywords() {
     local -a cfg_flag keywords
-    cfg_flag=( $(_kort_config_flag) )
-    keywords=( ${(f)"$(kort _list-keywords $cfg_flag 2>/dev/null)"} )
+    local i config_val
+    cfg_flag=()
+    for (( i=2; i < $#words; i++ )); do
+      if [[ $words[$i] == --config && -n $words[$((i+1))] ]]; then
+        config_val=$words[$((i+1))]
+        cfg_flag=( --config "$config_val" )
+        break
+      elif [[ $words[$i] == --config=* ]]; then
+        config_val=${words[$i]#--config=}
+        cfg_flag=( --config "$config_val" )
+        break
+      fi
+    done
+    keywords=( ${(f)"$(kort _list-keywords "${cfg_flag[@]}" 2>/dev/null)"} )
     _describe 'keyword' keywords
   }
 
@@ -203,6 +204,12 @@ _kort() {
         '--rbuffer=[Buffer right of cursor]:rbuffer:' \
         '--cache=[Cache file path]:cache file:_files' \
         '--config=[Config file path]:config file:_files' \
+        '*:' && return
+      ;;
+    next-placeholder)
+      _arguments -s \
+        '--lbuffer=[Buffer left of cursor]:lbuffer:' \
+        '--rbuffer=[Buffer right of cursor]:rbuffer:' \
         '*:' && return
       ;;
     add)
