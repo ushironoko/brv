@@ -121,6 +121,7 @@ impl fmt::Display for PlaceholderOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
 
     #[test]
     fn test_expand_output_success_display() {
@@ -128,14 +129,16 @@ mod tests {
             buffer: "git commit".to_string(),
             cursor: 10,
         };
-        let formatted = output.to_string();
-        assert_eq!(formatted, "success\ngit commit\n10");
+        assert_snapshot!(output.to_string(), @r"
+        success
+        git commit
+        10
+        ");
     }
 
     #[test]
     fn test_expand_output_no_match_display() {
-        let output = ExpandOutput::NoMatch;
-        assert_eq!(output.to_string(), "no_match");
+        assert_snapshot!(ExpandOutput::NoMatch.to_string(), @"no_match");
     }
 
     #[test]
@@ -145,8 +148,12 @@ mod tests {
             prefix: "echo ".to_string(),
             rbuffer: "".to_string(),
         };
-        let formatted = output.to_string();
-        assert_eq!(formatted, "evaluate\ndate +%Y-%m-%d\necho \n");
+        assert_snapshot!(output.to_string(), @r"
+        evaluate
+        date +%Y-%m-%d
+        echo
+
+        ");
     }
 
     #[test]
@@ -157,14 +164,18 @@ mod tests {
             prefix: "echo ".to_string(),
             rbuffer: "".to_string(),
         };
-        let formatted = output.to_string();
-        assert_eq!(formatted, "function\nmy_func\nmf\necho \n");
+        assert_snapshot!(output.to_string(), @r"
+        function
+        my_func
+        mf
+        echo
+
+        ");
     }
 
     #[test]
     fn test_expand_output_stale_cache_display() {
-        let output = ExpandOutput::StaleCache;
-        assert_eq!(output.to_string(), "stale_cache");
+        assert_snapshot!(ExpandOutput::StaleCache.to_string(), @"stale_cache");
     }
 
     #[test]
@@ -173,14 +184,16 @@ mod tests {
             buffer: "git commit -m ''".to_string(),
             cursor: 15,
         };
-        let formatted = output.to_string();
-        assert_eq!(formatted, "success\ngit commit -m ''\n15");
+        assert_snapshot!(output.to_string(), @r"
+        success
+        git commit -m ''
+        15
+        ");
     }
 
     #[test]
     fn test_placeholder_output_no_placeholder_display() {
-        let output = PlaceholderOutput::NoPlaceholder;
-        assert_eq!(output.to_string(), "no_placeholder");
+        assert_snapshot!(PlaceholderOutput::NoPlaceholder.to_string(), @"no_placeholder");
     }
 
     #[test]
@@ -201,11 +214,13 @@ mod tests {
                 },
             ],
         };
-        let formatted = output.to_string();
-        assert_eq!(
-            formatted,
-            "candidates\n3\ngc\tgit commit -m '{{message}}'\ngp\tgit push\ngd\tgit diff"
-        );
+        assert_snapshot!(output.to_string(), @r"
+        candidates
+        3
+        gc	git commit -m '{{message}}'
+        gp	git push
+        gd	git diff
+        ");
     }
 
     #[test]
@@ -222,10 +237,11 @@ mod tests {
                 },
             ],
         };
-        let formatted = output.to_string();
-        assert_eq!(
-            formatted,
-            "candidates\n2\na\tline1\\nline2\nb\tcol1\\tcol2"
-        );
+        assert_snapshot!(output.to_string(), @r"
+        candidates
+        2
+        a	line1\nline2
+        b	col1\tcol2
+        ");
     }
 }
