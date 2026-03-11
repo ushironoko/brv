@@ -447,3 +447,12 @@ fn test_list_keywords_hidden_from_help() {
         .success()
         .stdout(predicate::str::contains("_list-keywords").not());
 }
+
+#[test]
+fn test_serve_socket_flag_in_help() {
+    abbrs_cmd()
+        .args(["serve", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--socket"));
+}

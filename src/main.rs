@@ -218,8 +218,12 @@ enum Commands {
         config: Option<PathBuf>,
     },
 
-    /// Start long-running serve mode (coproc/pipe communication)
+    /// Start long-running serve mode (pipe or socket communication)
     Serve {
+        /// Unix domain socket path (if omitted, uses stdin/stdout pipe mode)
+        #[arg(long)]
+        socket: Option<PathBuf>,
+
         /// Cache file path
         #[arg(long)]
         cache: Option<PathBuf>,
@@ -337,7 +341,10 @@ fn main() -> Result<()> {
         Commands::Import { source } => cmd_import(source),
         Commands::Export { config: cfg } => cmd_export(cfg),
         Commands::ListKeywords { config: cfg } => cmd_list_keywords(cfg),
-        Commands::Serve { cache, config } => serve::run(cache, config),
+        Commands::Serve { socket, cache, config } => match socket {
+            Some(sock_path) => serve::run_socket(sock_path, cache, config),
+            None => serve::run(cache, config),
+        },
     }
 }
 
