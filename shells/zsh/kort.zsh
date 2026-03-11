@@ -352,7 +352,9 @@ _kort_line_pre_redraw() {
       kort-expand-space|kort-expand-accept|kort-next-placeholder|kort-literal-space)
         ;;
       *)
-        _kort_clear_candidates 1
+        # Accept current candidate (don't restore) so the user's keystroke is preserved.
+        # Only explicit cancel (kort-literal-space / Ctrl+Space) restores the original token.
+        _kort_clear_candidates 0
         ;;
     esac
   fi
