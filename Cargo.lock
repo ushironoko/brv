@@ -13,6 +13,7 @@ dependencies = [
  "criterion",
  "crossterm",
  "insta",
+ "libc",
  "predicates",
  "proptest",
  "regex",

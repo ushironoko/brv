@@ -530,7 +530,7 @@ impl SocketConnection {
 #[test]
 fn test_socket_ping() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -549,7 +549,7 @@ expansion = "git"
 #[test]
 fn test_socket_expand_basic() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -570,7 +570,7 @@ expansion = "git"
 #[test]
 fn test_socket_expand_no_match() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -589,7 +589,7 @@ expansion = "git"
 #[test]
 fn test_socket_multiple_requests() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -625,7 +625,7 @@ expansion = "git commit"
 #[test]
 fn test_socket_reconnect_after_disconnect() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -662,7 +662,7 @@ fn test_socket_stale_cleanup_on_start() {
     use std::os::unix::net::UnixListener;
 
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -671,6 +671,17 @@ keyword = "g"
 expansion = "git"
 "#,
     );
+
+    // Create the private socket directory (matches what run_socket expects)
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir(socket_path.parent().unwrap()).unwrap();
+        std::fs::set_permissions(
+            socket_path.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+    }
 
     // Create a real stale socket (bind then drop the listener so nobody is listening)
     {
@@ -690,7 +701,7 @@ expansion = "git"
 #[test]
 fn test_socket_refuses_non_socket_path() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -700,7 +711,16 @@ expansion = "git"
 "#,
     );
 
-    // Create a regular file at the socket path
+    // Create the private socket directory and a regular file at the socket path
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir(socket_path.parent().unwrap()).unwrap();
+        std::fs::set_permissions(
+            socket_path.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+    }
     std::fs::write(&socket_path, "not a socket").unwrap();
 
     // Server should refuse to start and not delete the file
@@ -737,7 +757,7 @@ expansion = "git"
 #[test]
 fn test_socket_cleanup_on_exit() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -763,7 +783,7 @@ expansion = "git"
 #[test]
 fn test_socket_reload() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"
@@ -812,7 +832,7 @@ expansion = "git push"
 #[test]
 fn test_socket_stale_cache() {
     let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("abbrs.sock");
+    let socket_path = dir.path().join("sock").join("abbrs.sock");
     let (config_path, cache_path) = setup_compiled(
         &dir,
         r#"

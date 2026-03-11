@@ -305,6 +305,55 @@ pub fn run(cache_path: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<
     serve_connection(&mut state, reader, &mut writer)
 }
 
+/// Ensure the parent directory of the socket path is a private directory
+/// owned by the current user with mode 0700. This prevents TOCTOU races
+/// in stale socket cleanup: since only the owner can modify files inside
+/// a 0700 directory, no other process can swap in a non-socket between
+/// our check and unlink.
+fn ensure_private_socket_dir(socket_path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let parent = socket_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("socket path has no parent directory"))?;
+
+    let our_uid = unsafe { libc::getuid() };
+
+    match std::fs::create_dir(parent) {
+        Ok(()) => {
+            // We just created it — set restrictive permissions
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Directory exists — verify it's safe
+            let meta = std::fs::symlink_metadata(parent)?;
+            if !meta.file_type().is_dir() {
+                anyhow::bail!(
+                    "socket parent path is not a directory: {}",
+                    parent.display()
+                );
+            }
+            if meta.uid() != our_uid {
+                anyhow::bail!(
+                    "socket directory not owned by current user: {}",
+                    parent.display()
+                );
+            }
+            let mode = meta.permissions().mode() & 0o777;
+            if mode != 0o700 {
+                anyhow::bail!(
+                    "socket directory has unsafe permissions {:o} (expected 0700): {}",
+                    mode,
+                    parent.display()
+                );
+            }
+        }
+        Err(e) => return Err(e.into()),
+    }
+
+    Ok(())
+}
+
 pub fn run_socket(
     socket_path: PathBuf,
     cache_path: Option<PathBuf>,
@@ -315,9 +364,13 @@ pub fn run_socket(
 
     let (cache_file, cfg_path) = resolve_paths(cache_path, config_path)?;
 
-    // Stale cleanup: test if existing socket is alive
+    // Ensure socket lives inside a private directory (mode 0700, owned by us).
+    // This eliminates TOCTOU races in the stale-cleanup below because only the
+    // owner can create/replace files inside the directory.
+    ensure_private_socket_dir(&socket_path)?;
+
+    // Stale cleanup: safe now because the parent directory is private
     if socket_path.exists() {
-        // Only attempt cleanup if the path is actually a Unix socket
         let metadata = std::fs::symlink_metadata(&socket_path)?;
         if !metadata.file_type().is_socket() {
             anyhow::bail!(
@@ -329,7 +382,7 @@ pub fn run_socket(
             Ok(_) => anyhow::bail!("socket already in use: {}", socket_path.display()),
             Err(_) => {
                 // Socket file exists but no process is listening — stale
-                let _ = std::fs::remove_file(&socket_path);
+                std::fs::remove_file(&socket_path)?;
             }
         }
     }
@@ -337,7 +390,6 @@ pub fn run_socket(
     let listener = UnixListener::bind(&socket_path)?;
 
     // Restrict socket file permissions to owner only
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;

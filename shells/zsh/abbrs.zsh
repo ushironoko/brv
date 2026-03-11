@@ -14,7 +14,8 @@ fi
 # Uses Unix domain socket + &! (disown) to avoid polluting the job table.
 # This fixes `wait` (no args) hanging when coproc was used.
 
-typeset -g _ABBRS_SOCK="${TMPDIR:-/tmp}/abbrs-$$.sock"
+typeset -g _ABBRS_SOCK_DIR="${TMPDIR:-/tmp}/abbrs-$(id -u)"
+typeset -g _ABBRS_SOCK="${_ABBRS_SOCK_DIR}/abbrs-$$.sock"
 typeset -g _ABBRS_SERVE_PID=0
 typeset -g _ABBRS_SOCK_FD=""
 

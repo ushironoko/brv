@@ -29,6 +29,7 @@ anyhow = "1.0.100"
 rustc-hash = "2.1.1"
 bitcode = { version = "0.6.9", features = ["serde"] }
 xdg = "2.5.2"
+libc = "0.2.183"
 crossterm = "0.28.1"
 toml_edit = "0.22.26"
 
