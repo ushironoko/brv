@@ -28,6 +28,9 @@ typeset -g  _ABBRS_CYCLE_RBUFFER=""
 typeset -g  _ABBRS_CYCLE_ORIG_TOKEN=""
 
 _abbrs_start_serve() {
+  # Don't start daemon if zsocket is unavailable
+  zmodload zsh/net/socket 2>/dev/null || return 1
+
   _abbrs_stop_serve
   $_ABBRS_BIN serve --socket "$_ABBRS_SOCK" &!
   _ABBRS_SERVE_PID=$!
@@ -38,9 +41,18 @@ _abbrs_start_serve() {
     command sleep 0.002
   done
   if [[ -S "$_ABBRS_SOCK" ]]; then
-    _abbrs_connect
+    _abbrs_connect || {
+      # Connection failed — kill the daemon we just spawned
+      kill $_ABBRS_SERVE_PID 2>/dev/null
+      _ABBRS_SERVE_PID=0
+      command rm -f "$_ABBRS_SOCK"
+      return 1
+    }
   else
+    # Startup timed out — kill the spawned daemon before giving up
+    kill $_ABBRS_SERVE_PID 2>/dev/null
     _ABBRS_SERVE_PID=0
+    command rm -f "$_ABBRS_SOCK"
     return 1
   fi
 }

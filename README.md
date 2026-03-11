@@ -8,12 +8,12 @@ abbrs pre-validates your abbreviations at compile time — catching conflicts wi
 
 Traditional zsh abbreviation tools expand keywords at runtime without checking whether they collide with real commands in your `$PATH` or zsh builtins — you only discover the conflict when something breaks. They also rely on shell-script lookups that slow down linearly as your abbreviation list grows.
 
-abbrs takes a different approach: **compile, then expand**. Running `abbrs compile` scans your PATH and builtins, rejects dangerous conflicts up front, and writes a binary cache. At expansion time, abbrs reads that cache for O(1) HashMap lookup — or runs as a persistent coproc (`abbrs serve`) for sub-100 µs latency, regardless of how many abbreviations you have.
+abbrs takes a different approach: **compile, then expand**. Running `abbrs compile` scans your PATH and builtins, rejects dangerous conflicts up front, and writes a binary cache. At expansion time, abbrs reads that cache for O(1) HashMap lookup — or runs as a persistent daemon (`abbrs serve`) communicating via Unix domain socket for sub-100 µs latency, regardless of how many abbreviations you have.
 
 ## Features
 
 - **Compile-time safety** — Detects conflicts with PATH commands and zsh builtins before they cause problems
-- **Sub-100 µs expansion** — Persistent coproc mode + binary cache (bitcode) for imperceptible latency
+- **Sub-100 µs expansion** — Persistent daemon mode via Unix domain socket + binary cache (bitcode) for imperceptible latency
 - **Layered expansion priority** — Contextual > Command-scoped > Regular > Global > Regex keywords > Prefix candidates
 - **Multiple expansion modes** — Replace, Evaluate (shell command output), Function call, and Placeholder (cursor positioning)
 - **Auto-recompilation** — Detects config changes automatically; no manual recompile needed
@@ -331,7 +331,7 @@ You will be prompted for the keyword, expansion, type (regular / global / contex
 | `abbrs remind` | Check for abbreviation reminders (called by ZLE) |
 | `abbrs expand` | Expand an abbreviation (called by the zsh widget) |
 | `abbrs next-placeholder` | Jump to next placeholder (called by the zsh widget) |
-| `abbrs serve` | Start persistent coproc mode for sub-100µs expansion latency |
+| `abbrs serve` | Start persistent daemon mode (Unix domain socket) for sub-100µs expansion latency |
 
 ## Auto-Recompilation
 
@@ -347,7 +347,7 @@ abbrs is designed for imperceptible expansion latency. Below are benchmark resul
 |---|---|---|
 | Language | Rust (compiled binary) | Zsh (shell script) |
 | Data structure | `FxHashMap` (O(1) lookup) | Zsh associative array |
-| Invocation | External process / coproc (`abbrs serve`) | In-process function call |
+| Invocation | External process / daemon via Unix domain socket (`abbrs serve`) | In-process function call |
 | Cache format | bitcode (binary) | Plain text files |
 
 ### Expansion lookup (in-process, criterion)
@@ -365,14 +365,14 @@ The core HashMap lookup scales O(1) regardless of abbreviation count:
 
 Measured with the comparison benchmark (`benchmarks/comparison/bench.zsh`, 1000 iterations per measurement):
 
-| Abbreviation count | abbrs expand | abbrs serve (coproc) | zsh-abbr |
+| Abbreviation count | abbrs expand | abbrs serve (socket) | zsh-abbr |
 |---|---|---|---|
 | 10 | ~1.0 ms | ~0.05 ms | ~0.07 ms |
 | 50 | ~1.0 ms | ~0.05 ms | ~0.12 ms |
 | 100 | ~1.0 ms | ~0.05 ms | ~0.18 ms |
 | 500 | ~1.1 ms | ~0.06 ms | ~0.70 ms |
 
-> **Note:** `abbrs expand` includes fork+exec overhead (~1 ms), which dominates the actual lookup time. `abbrs serve` eliminates this by running as a persistent coproc, communicating via pipe — achieving **sub-100µs** latency that is faster than zsh-abbr at any scale.
+> **Note:** `abbrs expand` includes fork+exec overhead (~1 ms), which dominates the actual lookup time. `abbrs serve` eliminates this by running as a persistent daemon, communicating via Unix domain socket — achieving **sub-100µs** latency that is faster than zsh-abbr at any scale.
 
 ### Other operations (criterion)
 
