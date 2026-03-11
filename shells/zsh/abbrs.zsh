@@ -10,9 +10,13 @@ if [[ $_ABBRS_BIN == "__ABBRS_BIN__" ]]; then
   _ABBRS_BIN="${commands[abbrs]:-abbrs}"
 fi
 
-# --- Coproc management ---
+# --- Socket-based serve management ---
+# Uses Unix domain socket + &! (disown) to avoid polluting the job table.
+# This fixes `wait` (no args) hanging when coproc was used.
 
-typeset -g _ABBRS_COPROC_PID=0
+typeset -g _ABBRS_SOCK="${TMPDIR:-/tmp}/abbrs-$$.sock"
+typeset -g _ABBRS_SERVE_PID=0
+typeset -g _ABBRS_SOCK_FD=""
 
 # --- Candidate cycling state ---
 
@@ -23,31 +27,49 @@ typeset -g  _ABBRS_CYCLE_LPREFIX=""
 typeset -g  _ABBRS_CYCLE_RBUFFER=""
 typeset -g  _ABBRS_CYCLE_ORIG_TOKEN=""
 
-# Note: zsh coproc is a singleton — only one coproc per shell.
-# If another plugin uses coproc, it will conflict with abbrs.
-_abbrs_start_coproc() {
-  setopt local_options no_monitor no_notify
-  _abbrs_stop_coproc
-  coproc $_ABBRS_BIN serve 2>/dev/null
-  _ABBRS_COPROC_PID=$!
-}
-
-_abbrs_stop_coproc() {
-  setopt local_options no_monitor no_notify
-  if (( _ABBRS_COPROC_PID > 0 )); then
-    kill $_ABBRS_COPROC_PID 2>/dev/null
-    wait $_ABBRS_COPROC_PID 2>/dev/null
-    _ABBRS_COPROC_PID=0
+_abbrs_start_serve() {
+  _abbrs_stop_serve
+  $_ABBRS_BIN serve --socket "$_ABBRS_SOCK" &!
+  _ABBRS_SERVE_PID=$!
+  # Wait for socket file to become available (max ~100ms)
+  local i
+  for (( i=0; i<50; i++ )); do
+    [[ -S "$_ABBRS_SOCK" ]] && break
+    command sleep 0.002
+  done
+  if [[ -S "$_ABBRS_SOCK" ]]; then
+    _abbrs_connect
+  else
+    _ABBRS_SERVE_PID=0
+    return 1
   fi
 }
 
+_abbrs_connect() {
+  zmodload zsh/net/socket 2>/dev/null || return 1
+  zsocket "$_ABBRS_SOCK" 2>/dev/null || return 1
+  _ABBRS_SOCK_FD=$REPLY
+}
+
+_abbrs_stop_serve() {
+  if [[ -n "$_ABBRS_SOCK_FD" ]]; then
+    exec {_ABBRS_SOCK_FD}>&-
+    _ABBRS_SOCK_FD=""
+  fi
+  if (( _ABBRS_SERVE_PID > 0 )); then
+    kill $_ABBRS_SERVE_PID 2>/dev/null
+    _ABBRS_SERVE_PID=0
+  fi
+  command rm -f "$_ABBRS_SOCK"
+}
+
 if (( $+functions[add-zsh-hook] )); then
-  add-zsh-hook zshexit _abbrs_stop_coproc
+  add-zsh-hook zshexit _abbrs_stop_serve
 else
-  zshexit() { _abbrs_stop_coproc }
+  zshexit() { _abbrs_stop_serve }
 fi
 
-# --- Coproc communication ---
+# --- Socket communication ---
 
 typeset -ga _abbrs_reply
 
@@ -55,21 +77,28 @@ _abbrs_request() {
   local request="$1"
   _abbrs_reply=()
 
-  # Check if coproc is alive
-  if (( _ABBRS_COPROC_PID <= 0 )) || ! kill -0 $_ABBRS_COPROC_PID 2>/dev/null; then
-    _abbrs_start_coproc
-    if (( _ABBRS_COPROC_PID <= 0 )); then
-      return 1
-    fi
+  # Check if serve process is alive; restart if needed
+  if (( _ABBRS_SERVE_PID <= 0 )) || ! kill -0 $_ABBRS_SERVE_PID 2>/dev/null; then
+    _abbrs_start_serve || return 1
   fi
 
-  # Send request (-r: raw mode to prevent backslash escape interpretation)
-  print -rp "$request" 2>/dev/null || return 1
+  # Reconnect if socket fd is closed
+  if [[ -z "$_ABBRS_SOCK_FD" ]]; then
+    _abbrs_connect || return 1
+  fi
+
+  # Send request
+  print -ru $_ABBRS_SOCK_FD "$request" 2>/dev/null || {
+    # Connection broken — try reconnect once
+    _ABBRS_SOCK_FD=""
+    _abbrs_connect || return 1
+    print -ru $_ABBRS_SOCK_FD "$request" 2>/dev/null || return 1
+  }
 
   # Read response lines until EOR (\x1e)
   local line
   while true; do
-    read -rp -t 1 line 2>/dev/null || return 1
+    read -ru $_ABBRS_SOCK_FD -t 1 line 2>/dev/null || return 1
     if [[ $line == $'\x1e'* ]]; then
       break
     fi
@@ -237,6 +266,7 @@ _abbrs_handle_expand_accept_response() {
     success)
       if [[ -n $out[2] ]]; then
         BUFFER=$out[2]
+        CURSOR=$out[3]
       fi
       ;;
     evaluate)
@@ -316,7 +346,7 @@ abbrs-expand-accept() {
   fi
 
   if [[ "$BUFFER" == exit || "$BUFFER" == logout ]]; then
-    _abbrs_stop_coproc
+    _abbrs_stop_serve
   fi
 
   zle accept-line
@@ -393,7 +423,7 @@ _abbrs_check_cycling() {
   fi
 }
 zle -N _abbrs_check_cycling
-# Try to load add-zle-hook-widget (shipped with zsh ≥5.3) for proper hook chaining.
+# Try to load add-zle-hook-widget (shipped with zsh >=5.3) for proper hook chaining.
 # +X forces immediate loading so $+functions is only true when the file actually exists in fpath.
 autoload -Uz +X add-zle-hook-widget 2>/dev/null
 if (( $+functions[add-zle-hook-widget] )); then
@@ -403,8 +433,14 @@ else
   zle -N zle-line-pre-redraw _abbrs_check_cycling
 fi
 
-# Start coproc on load
-_abbrs_start_coproc
+# Start serve process on load (socket mode if zsocket available, otherwise per-process fallback)
+if zmodload zsh/net/socket 2>/dev/null; then
+  _abbrs_start_serve
+else
+  # zsocket not available — per-process fallback only (no background daemon)
+  # _abbrs_request will always fail, so widgets fall through to _abbrs_*_fallback
+  :
+fi
 
 # Zsh completion function
 _abbrs() {
@@ -424,7 +460,7 @@ _abbrs() {
     'remind:Check for abbreviation reminders'
     'import:Import abbreviations'
     'export:Export abbreviations'
-    'serve:Start serve mode (coproc)'
+    'serve:Start serve mode'
   )
 
   _abbrs_keywords() {
@@ -473,6 +509,7 @@ _abbrs() {
       ;;
     serve)
       _arguments -s \
+        '--socket=[Unix domain socket path]:socket file:_files' \
         '--cache=[Cache file path]:cache file:_files' \
         '--config=[Config file path]:config file:_files' \
         '*:' && return

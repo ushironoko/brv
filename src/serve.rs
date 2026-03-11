@@ -213,7 +213,10 @@ fn handle_ping<W: Write>(writer: &mut W) -> std::io::Result<()> {
     write_response(writer, "pong")
 }
 
-pub fn run(cache_path: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<()> {
+fn resolve_paths(
+    cache_path: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+) -> Result<(PathBuf, PathBuf)> {
     let cache_file = match cache_path {
         Some(p) => p,
         None => crate::config::default_cache_path()?,
@@ -222,21 +225,20 @@ pub fn run(cache_path: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<
         Some(p) => p,
         None => crate::config::default_config_path()?,
     };
+    Ok((cache_file, cfg_path))
+}
 
-    let mut state = ServeState::new(cache_file, cfg_path);
-    state.load_cache();
-
-    let stdin = std::io::stdin();
-    let reader = BufReader::new(stdin.lock());
-    let stdout = std::io::stdout();
-    let mut writer = LineWriter::new(stdout.lock());
-
+fn serve_connection<R: BufRead, W: Write>(
+    state: &mut ServeState,
+    reader: R,
+    writer: &mut W,
+) -> Result<()> {
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    break;
+                    return Ok(());
                 }
                 eprintln!("abbrs serve: read error: {}", e);
                 continue;
@@ -251,12 +253,12 @@ pub fn run(cache_path: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<
             Ok(r) => r,
             Err(e) => {
                 let result = write_response(
-                    &mut writer,
+                    writer,
                     &format!("error\t{}", e),
                 );
                 if let Err(write_err) = result {
                     if write_err.kind() == std::io::ErrorKind::BrokenPipe {
-                        break;
+                        return Ok(());
                     }
                     eprintln!("abbrs serve: write error: {}", write_err);
                 }
@@ -266,26 +268,92 @@ pub fn run(cache_path: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<
 
         let result = match request {
             Request::Expand { lbuffer, rbuffer } => {
-                handle_expand(&mut state, &lbuffer, &rbuffer, &mut writer)
+                handle_expand(state, &lbuffer, &rbuffer, writer)
             }
             Request::Placeholder { lbuffer, rbuffer } => {
-                handle_placeholder(&lbuffer, &rbuffer, &mut writer)
+                handle_placeholder(&lbuffer, &rbuffer, writer)
             }
             Request::Remind { buffer } => {
-                handle_remind(&state, &buffer, &mut writer)
+                handle_remind(state, &buffer, writer)
             }
-            Request::Reload => handle_reload(&mut state, &mut writer),
-            Request::Ping => handle_ping(&mut writer),
+            Request::Reload => handle_reload(state, writer),
+            Request::Ping => handle_ping(writer),
         };
 
         if let Err(e) = result {
             if e.kind() == std::io::ErrorKind::BrokenPipe {
-                break;
+                return Ok(());
             }
             eprintln!("abbrs serve: write error: {}", e);
         }
     }
 
+    Ok(())
+}
+
+pub fn run(cache_path: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<()> {
+    let (cache_file, cfg_path) = resolve_paths(cache_path, config_path)?;
+
+    let mut state = ServeState::new(cache_file, cfg_path);
+    state.load_cache();
+
+    let stdin = std::io::stdin();
+    let reader = BufReader::new(stdin.lock());
+    let stdout = std::io::stdout();
+    let mut writer = LineWriter::new(stdout.lock());
+
+    serve_connection(&mut state, reader, &mut writer)
+}
+
+pub fn run_socket(
+    socket_path: PathBuf,
+    cache_path: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+) -> Result<()> {
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    let (cache_file, cfg_path) = resolve_paths(cache_path, config_path)?;
+
+    // Stale cleanup: test if existing socket is alive
+    if socket_path.exists() {
+        match UnixStream::connect(&socket_path) {
+            Ok(_) => anyhow::bail!("socket already in use: {}", socket_path.display()),
+            Err(_) => {
+                let _ = std::fs::remove_file(&socket_path);
+            }
+        }
+    }
+
+    let listener = UnixListener::bind(&socket_path)?;
+
+    // Restrict socket file permissions to owner only
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    let mut state = ServeState::new(cache_file, cfg_path);
+    state.load_cache();
+
+    for stream in listener.incoming() {
+        let stream = match stream {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("abbrs serve: accept error: {}", e);
+                continue;
+            }
+        };
+        let reader = BufReader::new(stream.try_clone()?);
+        let mut writer = LineWriter::new(stream);
+        if let Err(e) = serve_connection(&mut state, reader, &mut writer) {
+            eprintln!("abbrs serve: connection error: {}", e);
+        }
+        // EOF → accept next connection (reconnect support)
+        // state is preserved across connections (RegexCache reuse etc.)
+    }
+
+    let _ = std::fs::remove_file(&socket_path);
     Ok(())
 }
 

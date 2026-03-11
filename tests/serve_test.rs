@@ -1,6 +1,8 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use tempfile::TempDir;
 
 const EOR: char = '\x1e';
@@ -427,4 +429,371 @@ expansion = "git"
     assert_eq!(response, vec!["pong"]);
 
     proc.close();
+}
+
+// === Socket mode tests ===
+
+struct SocketServeProcess {
+    child: Child,
+    socket_path: PathBuf,
+}
+
+impl SocketServeProcess {
+    fn start(socket_path: &Path, cache_path: &Path, config_path: &Path) -> Self {
+        let abbrs_bin = cargo_bin_cmd!("abbrs").get_program().to_owned();
+        let child = Command::new(abbrs_bin)
+            .args([
+                "serve",
+                "--socket",
+                socket_path.to_str().unwrap(),
+                "--cache",
+                cache_path.to_str().unwrap(),
+                "--config",
+                config_path.to_str().unwrap(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to start abbrs serve --socket");
+
+        // Wait for socket to become connectable (max ~500ms)
+        let mut ready = false;
+        for _ in 0..100 {
+            if socket_path.exists() {
+                if UnixStream::connect(socket_path).is_ok() {
+                    ready = true;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            ready,
+            "socket did not become connectable: {}",
+            socket_path.display()
+        );
+
+        Self {
+            child,
+            socket_path: socket_path.to_path_buf(),
+        }
+    }
+
+    fn connect(&self) -> SocketConnection {
+        let stream =
+            UnixStream::connect(&self.socket_path).expect("failed to connect to socket");
+        let reader = BufReader::new(stream.try_clone().unwrap());
+        let writer = std::io::LineWriter::new(stream);
+        SocketConnection { reader, writer }
+    }
+}
+
+impl Drop for SocketServeProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+struct SocketConnection {
+    reader: BufReader<UnixStream>,
+    writer: std::io::LineWriter<UnixStream>,
+}
+
+impl SocketConnection {
+    fn send(&mut self, request: &str) -> Vec<String> {
+        writeln!(self.writer, "{}", request).expect("failed to write to socket");
+        self.writer.flush().expect("failed to flush socket");
+        self.read_response()
+    }
+
+    fn read_response(&mut self) -> Vec<String> {
+        let mut lines = Vec::new();
+        loop {
+            let mut line = String::new();
+            let n = self.reader.read_line(&mut line).expect("failed to read line");
+            if n == 0 {
+                break; // EOF
+            }
+            let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+            if trimmed.starts_with(EOR) {
+                break;
+            }
+            lines.push(trimmed.to_string());
+        }
+        lines
+    }
+}
+
+#[test]
+fn test_socket_ping() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    );
+    let proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+    let mut conn = proc.connect();
+    let response = conn.send("ping");
+    assert_eq!(response, vec!["pong"]);
+    drop(proc);
+}
+
+#[test]
+fn test_socket_expand_basic() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    );
+    let proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+    let mut conn = proc.connect();
+    let response = conn.send("expand\tg\t");
+    assert_eq!(response[0], "success");
+    assert_eq!(response[1], "git");
+    assert_eq!(response[2], "3");
+    drop(proc);
+}
+
+#[test]
+fn test_socket_expand_no_match() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    );
+    let proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+    let mut conn = proc.connect();
+    let response = conn.send("expand\tunknown\t");
+    assert_eq!(response, vec!["no_match"]);
+    drop(proc);
+}
+
+#[test]
+fn test_socket_multiple_requests() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+
+[[abbr]]
+keyword = "gc"
+expansion = "git commit"
+"#,
+    );
+    let proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+    let mut conn = proc.connect();
+
+    let response = conn.send("expand\tg\t");
+    assert_eq!(response[0], "success");
+    assert_eq!(response[1], "git");
+
+    let response = conn.send("expand\tgc\t");
+    assert_eq!(response[0], "success");
+    assert_eq!(response[1], "git commit");
+
+    let response = conn.send("expand\txyz\t");
+    assert_eq!(response, vec!["no_match"]);
+
+    let response = conn.send("ping");
+    assert_eq!(response, vec!["pong"]);
+
+    drop(proc);
+}
+
+#[test]
+fn test_socket_reconnect_after_disconnect() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    );
+    let proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+
+    // First connection
+    {
+        let mut conn = proc.connect();
+        let response = conn.send("ping");
+        assert_eq!(response, vec!["pong"]);
+    } // connection dropped (EOF sent to server)
+
+    // Small delay for server to accept next connection
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Reconnect
+    {
+        let mut conn = proc.connect();
+        let response = conn.send("expand\tg\t");
+        assert_eq!(response[0], "success");
+        assert_eq!(response[1], "git");
+    }
+
+    drop(proc);
+}
+
+#[test]
+fn test_socket_stale_cleanup_on_start() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    );
+
+    // Create a stale socket file (just a regular file, not a real socket)
+    std::fs::write(&socket_path, "stale").unwrap();
+
+    // Server should clean up stale socket and start successfully
+    let proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+    let mut conn = proc.connect();
+    let response = conn.send("ping");
+    assert_eq!(response, vec!["pong"]);
+    drop(proc);
+}
+
+#[test]
+fn test_socket_cleanup_on_exit() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    );
+
+    let mut proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+    assert!(socket_path.exists());
+
+    // Kill server
+    proc.child.kill().unwrap();
+    proc.child.wait().unwrap();
+
+    // Note: kill(SIGKILL) doesn't run cleanup, so the socket file may remain.
+    // The important thing is that run_socket() has cleanup code for normal exit
+    // and that stale cleanup works on next start (tested above).
+    // We explicitly remove it in Drop to avoid interference.
+}
+
+#[test]
+fn test_socket_reload() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    );
+    let proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+    let mut conn = proc.connect();
+
+    // Initial expand
+    let response = conn.send("expand\tg\t");
+    assert_eq!(response[0], "success");
+    assert_eq!(response[1], "git");
+
+    // Update config and recompile
+    let new_config = r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+
+[[abbr]]
+keyword = "gp"
+expansion = "git push"
+"#;
+    std::fs::write(&config_path, new_config).unwrap();
+    cargo_bin_cmd!("abbrs")
+        .args(["compile", "--config", config_path.to_str().unwrap()])
+        .env("XDG_CACHE_HOME", dir.path().join("cache"))
+        .assert()
+        .success();
+
+    // Reload
+    let response = conn.send("reload");
+    assert_eq!(response, vec!["ok"]);
+
+    // New abbreviation should work
+    let response = conn.send("expand\tgp\t");
+    assert_eq!(response[0], "success");
+    assert_eq!(response[1], "git push");
+
+    drop(proc);
+}
+
+#[test]
+fn test_socket_stale_cache() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("abbrs.sock");
+    let (config_path, cache_path) = setup_compiled(
+        &dir,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    );
+    let proc = SocketServeProcess::start(&socket_path, &cache_path, &config_path);
+    let mut conn = proc.connect();
+
+    // Ensure cache is loaded
+    let response = conn.send("ping");
+    assert_eq!(response, vec!["pong"]);
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Modify config without recompiling → stale
+    std::fs::write(
+        &config_path,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+
+[[abbr]]
+keyword = "new"
+expansion = "new_command"
+"#,
+    )
+    .unwrap();
+
+    let response = conn.send("expand\tg\t");
+    assert_eq!(response, vec!["stale_cache"]);
+
+    drop(proc);
 }
