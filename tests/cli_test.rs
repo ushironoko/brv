@@ -244,7 +244,7 @@ fn test_init_zsh_outputs_shell_script() {
         .stdout(predicate::str::contains("_kort_check_cycling"))
         .stdout(predicate::str::contains("zle -N _kort_check_cycling"))
         .stdout(predicate::str::contains(
-            "autoload -Uz add-zle-hook-widget",
+            "autoload -Uz +X add-zle-hook-widget",
         ))
         .stdout(predicate::str::contains(
             "add-zle-hook-widget line-pre-redraw _kort_check_cycling",
@@ -276,8 +276,10 @@ fn test_init_zsh_hook_chaining_in_clean_shell() {
     //
     // We probe this by:
     //   1. Checking that `add-zle-hook-widget` is a loaded function after sourcing.
-    //   2. Checking that `zle-line-pre-redraw` is NOT registered as a plain widget
-    //      (it should be managed by the hook system instead).
+    //   2. Checking that the direct fallback bind (`zle -N zle-line-pre-redraw _kort_check_cycling`)
+    //      was NOT called. Note: `add-zle-hook-widget` itself registers a dispatcher widget
+    //      (`zle -N zle-line-pre-redraw azhw:zle-line-pre-redraw`), so we match the exact
+    //      fallback signature to distinguish the two paths.
     let test_script = format!(
         r#"
         # Source the init script (stub out zle/bindkey since we're non-interactive)
@@ -296,10 +298,11 @@ fn test_init_zsh_hook_chaining_in_clean_shell() {
         fi
 
         # The fallback path registers "zle -N zle-line-pre-redraw _kort_check_cycling".
-        # If add-zle-hook-widget was used, that exact call should NOT appear.
+        # add-zle-hook-widget itself also calls "zle -N zle-line-pre-redraw azhw:..."
+        # so we must match the exact fallback signature to distinguish the two paths.
         local found_fallback=0
         for call in "${{_ZLE_CALLS[@]}}"; do
-            if [[ "$call" == *"zle-line-pre-redraw"* ]]; then
+            if [[ "$call" == *"-N zle-line-pre-redraw _kort_check_cycling"* ]]; then
                 found_fallback=1
             fi
         done

@@ -360,8 +360,9 @@ _kort_check_cycling() {
   fi
 }
 zle -N _kort_check_cycling
-# Autoload add-zle-hook-widget (shipped with zsh ≥5.3) for proper hook chaining
-autoload -Uz add-zle-hook-widget 2>/dev/null
+# Try to load add-zle-hook-widget (shipped with zsh ≥5.3) for proper hook chaining.
+# +X forces immediate loading so $+functions is only true when the file actually exists in fpath.
+autoload -Uz +X add-zle-hook-widget 2>/dev/null
 if (( $+functions[add-zle-hook-widget] )); then
   add-zle-hook-widget line-pre-redraw _kort_check_cycling
 else
