@@ -6,6 +6,15 @@
 
 typeset -g _KORT_COPROC_PID=0
 
+# --- Candidate cycling state ---
+
+typeset -g  _KORT_CYCLING=0
+typeset -ga _KORT_CANDIDATES=()
+typeset -g  _KORT_CYCLE_INDEX=0
+typeset -g  _KORT_CYCLE_LPREFIX=""
+typeset -g  _KORT_CYCLE_RBUFFER=""
+typeset -g  _KORT_CYCLE_ORIG_TOKEN=""
+
 # Note: zsh coproc is a singleton — only one coproc per shell.
 # If another plugin uses coproc, it will conflict with kort.
 _kort_start_coproc() {
@@ -81,6 +90,51 @@ _kort_remind_fallback() {
   kort remind --buffer="$1" 2>/dev/null
 }
 
+# --- Candidate cycling helpers ---
+
+_kort_clear_candidates() {
+  if (( _KORT_CYCLING )); then
+    local restore=${1:-0}
+    if (( restore )); then
+      # Cancel: restore original token
+      LBUFFER="${_KORT_CYCLE_LPREFIX}${_KORT_CYCLE_ORIG_TOKEN}"
+      RBUFFER="$_KORT_CYCLE_RBUFFER"
+    fi
+    _KORT_CYCLING=0
+    _KORT_CANDIDATES=()
+    _KORT_CYCLE_INDEX=0
+    _KORT_CYCLE_LPREFIX=""
+    _KORT_CYCLE_RBUFFER=""
+    _KORT_CYCLE_ORIG_TOKEN=""
+    zle -M ""
+  fi
+}
+
+_kort_cycle_next() {
+  (( _KORT_CYCLE_INDEX = (_KORT_CYCLE_INDEX % $#_KORT_CANDIDATES) + 1 ))
+
+  local selected="${_KORT_CANDIDATES[$_KORT_CYCLE_INDEX]}"
+  local kw="${selected%%	*}"
+
+  LBUFFER="${_KORT_CYCLE_LPREFIX}${kw}"
+  RBUFFER="$_KORT_CYCLE_RBUFFER"
+
+  local msg="" i
+  for (( i=1; i <= $#_KORT_CANDIDATES; i++ )); do
+    local ckw="${_KORT_CANDIDATES[$i]%%	*}"
+    local cexp="${_KORT_CANDIDATES[$i]#*	}"
+    if (( i > 1 )); then
+      msg+=$'\n'
+    fi
+    if (( i == _KORT_CYCLE_INDEX )); then
+      msg+=$'\x1b[7m'" ${ckw} → ${cexp} "$'\x1b[0m'
+    else
+      msg+="  ${ckw} → ${cexp}"
+    fi
+  done
+  zle -M "$msg"
+}
+
 # --- Response handling ---
 
 _kort_handle_expand_response() {
@@ -122,12 +176,32 @@ _kort_handle_expand_response() {
       ;;
     candidates)
       local count=$out[2]
-      local msg=""
+      _KORT_CANDIDATES=()
       local i
       for (( i=3; i <= count + 2; i++ )); do
-        local kw="${out[$i]%%	*}"
-        local exp="${out[$i]#*	}"
-        msg+="  ${kw} → ${exp}"$'\n'
+        _KORT_CANDIDATES+=( "$out[$i]" )
+      done
+
+      local lbuf="$LBUFFER"
+      if [[ "$lbuf" == *" "* ]]; then
+        _KORT_CYCLE_LPREFIX="${lbuf% *} "
+        _KORT_CYCLE_ORIG_TOKEN="${lbuf##* }"
+      else
+        _KORT_CYCLE_LPREFIX=""
+        _KORT_CYCLE_ORIG_TOKEN="$lbuf"
+      fi
+      _KORT_CYCLE_RBUFFER="$RBUFFER"
+      _KORT_CYCLING=1
+      _KORT_CYCLE_INDEX=0
+
+      local msg=""
+      for (( i=1; i <= $#_KORT_CANDIDATES; i++ )); do
+        local kw="${_KORT_CANDIDATES[$i]%%	*}"
+        local exp="${_KORT_CANDIDATES[$i]#*	}"
+        if (( i > 1 )); then
+          msg+=$'\n'
+        fi
+        msg+="  ${kw} → ${exp}"
       done
       zle -M "$msg"
       ;;
@@ -195,11 +269,17 @@ _kort_expand_with_fallback() {
 
 # Expand abbreviation on Space key
 kort-expand-space() {
+  if (( _KORT_CYCLING )); then
+    _kort_clear_candidates
+  fi
   _kort_expand_with_fallback _kort_handle_expand_response
 }
 
 # Expand abbreviation on Enter key and execute
 kort-expand-accept() {
+  if (( _KORT_CYCLING )); then
+    _kort_clear_candidates
+  fi
   _kort_expand_with_fallback _kort_handle_expand_accept_response
 
   # Check for reminders before accepting
@@ -220,12 +300,18 @@ kort-expand-accept() {
 
 # Jump to next placeholder on Tab key
 kort-next-placeholder() {
+  # Priority 1: Candidate cycling (skip placeholder check during cycling)
+  if (( _KORT_CYCLING )); then
+    _kort_cycle_next
+    return
+  fi
+
+  # Priority 2: Placeholder jump
   if _kort_request $'placeholder\t'"${LBUFFER}"$'\t'"${RBUFFER}"; then
     if [[ ${_kort_reply[1]} == "success" && -n ${_kort_reply[2]} ]]; then
       BUFFER=${_kort_reply[2]}
       CURSOR=${_kort_reply[3]}
-    else
-      zle expand-or-complete
+      return
     fi
   else
     local -a out
@@ -233,14 +319,17 @@ kort-next-placeholder() {
     if [[ $out[1] == "success" && -n $out[2] ]]; then
       BUFFER=$out[2]
       CURSOR=$out[3]
-    else
-      zle expand-or-complete
+      return
     fi
   fi
+
+  # Priority 3: Shell completion
+  zle expand-or-complete
 }
 
 # Literal space (no expansion)
 kort-literal-space() {
+  _kort_clear_candidates 1
   zle self-insert
 }
 
@@ -255,6 +344,31 @@ bindkey " " kort-expand-space
 bindkey "^M" kort-expand-accept
 bindkey "^I" kort-next-placeholder
 bindkey "^ " kort-literal-space
+
+# Cancel candidate cycling on any non-kort keypress
+_kort_check_cycling() {
+  if (( _KORT_CYCLING )); then
+    case "$LASTWIDGET" in
+      kort-expand-space|kort-expand-accept|kort-next-placeholder|kort-literal-space)
+        ;;
+      *)
+        # Accept current candidate (don't restore) so the user's keystroke is preserved.
+        # Only explicit cancel (kort-literal-space / Ctrl+Space) restores the original token.
+        _kort_clear_candidates 0
+        ;;
+    esac
+  fi
+}
+zle -N _kort_check_cycling
+# Try to load add-zle-hook-widget (shipped with zsh ≥5.3) for proper hook chaining.
+# +X forces immediate loading so $+functions is only true when the file actually exists in fpath.
+autoload -Uz +X add-zle-hook-widget 2>/dev/null
+if (( $+functions[add-zle-hook-widget] )); then
+  add-zle-hook-widget line-pre-redraw _kort_check_cycling
+else
+  # Fallback for ancient zsh without add-zle-hook-widget
+  zle -N zle-line-pre-redraw _kort_check_cycling
+fi
 
 # Start coproc on load
 _kort_start_coproc
