@@ -13,6 +13,7 @@ typeset -ga _KORT_CANDIDATES=()
 typeset -g  _KORT_CYCLE_INDEX=0
 typeset -g  _KORT_CYCLE_LPREFIX=""
 typeset -g  _KORT_CYCLE_RBUFFER=""
+typeset -g  _KORT_CYCLE_ORIG_TOKEN=""
 
 # Note: zsh coproc is a singleton — only one coproc per shell.
 # If another plugin uses coproc, it will conflict with kort.
@@ -93,11 +94,18 @@ _kort_remind_fallback() {
 
 _kort_clear_candidates() {
   if (( _KORT_CYCLING )); then
+    local restore=${1:-0}
+    if (( restore )); then
+      # Cancel: restore original token
+      LBUFFER="${_KORT_CYCLE_LPREFIX}${_KORT_CYCLE_ORIG_TOKEN}"
+      RBUFFER="$_KORT_CYCLE_RBUFFER"
+    fi
     _KORT_CYCLING=0
     _KORT_CANDIDATES=()
     _KORT_CYCLE_INDEX=0
     _KORT_CYCLE_LPREFIX=""
     _KORT_CYCLE_RBUFFER=""
+    _KORT_CYCLE_ORIG_TOKEN=""
     zle -M ""
   fi
 }
@@ -177,8 +185,10 @@ _kort_handle_expand_response() {
       local lbuf="$LBUFFER"
       if [[ "$lbuf" == *" "* ]]; then
         _KORT_CYCLE_LPREFIX="${lbuf% *} "
+        _KORT_CYCLE_ORIG_TOKEN="${lbuf##* }"
       else
         _KORT_CYCLE_LPREFIX=""
+        _KORT_CYCLE_ORIG_TOKEN="$lbuf"
       fi
       _KORT_CYCLE_RBUFFER="$RBUFFER"
       _KORT_CYCLING=1
@@ -319,7 +329,7 @@ kort-next-placeholder() {
 
 # Literal space (no expansion)
 kort-literal-space() {
-  _kort_clear_candidates
+  _kort_clear_candidates 1
   zle self-insert
 }
 
@@ -342,7 +352,7 @@ _kort_line_pre_redraw() {
       kort-expand-space|kort-expand-accept|kort-next-placeholder|kort-literal-space)
         ;;
       *)
-        _kort_clear_candidates
+        _kort_clear_candidates 1
         ;;
     esac
   fi
@@ -351,11 +361,13 @@ _kort_line_pre_redraw() {
     zle _kort_orig_line_pre_redraw
   fi
 }
-# Save existing handler before overriding
-if (( $+widgets[zle-line-pre-redraw] )); then
-  zle -A zle-line-pre-redraw _kort_orig_line_pre_redraw
+# Save existing handler before overriding (guard against re-sourcing)
+if [[ ${widgets[zle-line-pre-redraw]:-} != *_kort_line_pre_redraw* ]]; then
+  if (( $+widgets[zle-line-pre-redraw] )); then
+    zle -A zle-line-pre-redraw _kort_orig_line_pre_redraw
+  fi
+  zle -N zle-line-pre-redraw _kort_line_pre_redraw
 fi
-zle -N zle-line-pre-redraw _kort_line_pre_redraw
 
 # Start coproc on load
 _kort_start_coproc
