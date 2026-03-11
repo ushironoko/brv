@@ -240,13 +240,94 @@ fn test_init_zsh_outputs_shell_script() {
         .stdout(predicate::str::contains("kort-expand-space"))
         .stdout(predicate::str::contains("zle -N"))
         .stdout(predicate::str::contains("bindkey"))
-        // Candidate cycling: hook widget and add-zle-hook-widget registration
+        // Candidate cycling: hook widget, autoload, and add-zle-hook-widget registration
         .stdout(predicate::str::contains("_kort_check_cycling"))
         .stdout(predicate::str::contains("zle -N _kort_check_cycling"))
-        .stdout(predicate::str::contains("add-zle-hook-widget line-pre-redraw _kort_check_cycling"))
+        .stdout(predicate::str::contains(
+            "autoload -Uz add-zle-hook-widget",
+        ))
+        .stdout(predicate::str::contains(
+            "add-zle-hook-widget line-pre-redraw _kort_check_cycling",
+        ))
         // Candidate cycling widgets
         .stdout(predicate::str::contains("kort-next-placeholder"))
         .stdout(predicate::str::contains("kort-literal-space"));
+}
+
+/// Regression test: verify that `kort init zsh` autoloads `add-zle-hook-widget`
+/// and uses it for hook registration in a clean zsh session (`zsh -f`).
+#[test]
+fn test_init_zsh_hook_chaining_in_clean_shell() {
+    // Skip if zsh is not available
+    let zsh_check = std::process::Command::new("zsh")
+        .args(["--version"])
+        .output();
+    if zsh_check.is_err() || !zsh_check.unwrap().status.success() {
+        eprintln!("skipping: zsh not available");
+        return;
+    }
+
+    let kort_bin = cargo_bin_cmd!("kort").get_program().to_owned();
+    let kort_path = kort_bin.to_str().unwrap();
+
+    // Source the init script in zsh -f (no user rc files) and check that
+    // add-zle-hook-widget was autoloaded and used (i.e. the direct
+    // zle -N zle-line-pre-redraw fallback was NOT taken).
+    //
+    // We probe this by:
+    //   1. Checking that `add-zle-hook-widget` is a loaded function after sourcing.
+    //   2. Checking that `zle-line-pre-redraw` is NOT registered as a plain widget
+    //      (it should be managed by the hook system instead).
+    let test_script = format!(
+        r#"
+        # Source the init script (stub out zle/bindkey since we're non-interactive)
+        zle() {{
+            _ZLE_CALLS+=("$*")
+        }}
+        bindkey() {{ : }}
+
+        eval "$("{kort}" init zsh)"
+
+        # After sourcing, add-zle-hook-widget must be a function
+        if (( $+functions[add-zle-hook-widget] )); then
+            echo "AUTOLOAD_OK"
+        else
+            echo "AUTOLOAD_MISSING"
+        fi
+
+        # The fallback path registers "zle -N zle-line-pre-redraw _kort_check_cycling".
+        # If add-zle-hook-widget was used, that exact call should NOT appear.
+        local found_fallback=0
+        for call in "${{_ZLE_CALLS[@]}}"; do
+            if [[ "$call" == *"zle-line-pre-redraw"* ]]; then
+                found_fallback=1
+            fi
+        done
+        if (( found_fallback )); then
+            echo "FALLBACK_TAKEN"
+        else
+            echo "HOOK_CHAINED"
+        fi
+        "#,
+        kort = kort_path,
+    );
+
+    let output = std::process::Command::new("zsh")
+        .args(["-f", "-c", &test_script])
+        .output()
+        .expect("failed to run zsh");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stdout.contains("AUTOLOAD_OK"),
+        "add-zle-hook-widget was not autoloaded in clean zsh. stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("HOOK_CHAINED"),
+        "fallback path was taken instead of add-zle-hook-widget. stdout: {stdout}, stderr: {stderr}"
+    );
 }
 
 #[test]

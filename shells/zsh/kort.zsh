@@ -360,11 +360,12 @@ _kort_check_cycling() {
   fi
 }
 zle -N _kort_check_cycling
-# Use add-zle-hook-widget to properly chain with existing line-pre-redraw hooks
+# Autoload add-zle-hook-widget (shipped with zsh ≥5.3) for proper hook chaining
+autoload -Uz add-zle-hook-widget 2>/dev/null
 if (( $+functions[add-zle-hook-widget] )); then
   add-zle-hook-widget line-pre-redraw _kort_check_cycling
 else
-  # Fallback: register directly (won't chain with other hooks)
+  # Fallback for ancient zsh without add-zle-hook-widget
   zle -N zle-line-pre-redraw _kort_check_cycling
 fi
 
