@@ -8,6 +8,8 @@ pub enum ConflictType {
     ExactPathMatch,
     /// Shell builtin → error
     ShellBuiltin,
+    /// Duplicate keyword with the same scope
+    DuplicateKeyword,
 }
 
 /// Conflict information
@@ -49,6 +51,13 @@ impl std::fmt::Display for Conflict {
                 write!(
                     f,
                     "\"{}\" conflicts with zsh builtin command",
+                    self.keyword
+                )
+            }
+            ConflictType::DuplicateKeyword => {
+                write!(
+                    f,
+                    "\"{}\" is defined multiple times with the same scope",
                     self.keyword
                 )
             }
@@ -153,6 +162,39 @@ pub fn zsh_builtins() -> &'static [&'static str] {
         "zregexparse",
         "zstyle",
     ]
+}
+
+/// Detect duplicate keywords with the same scope
+pub fn detect_duplicates(abbreviations: &[Abbreviation]) -> ConflictReport {
+    let mut report = ConflictReport::default();
+
+    for (i, a) in abbreviations.iter().enumerate() {
+        for b in &abbreviations[i + 1..] {
+            if a.keyword != b.keyword {
+                continue;
+            }
+            let same_command = a.command == b.command;
+            let same_global = a.global == b.global;
+            let same_regex = a.regex == b.regex;
+            let same_context = match (&a.context, &b.context) {
+                (None, None) => true,
+                (Some(_), None) | (None, Some(_)) => false,
+                (Some(ca), Some(cb)) => {
+                    ca.lbuffer == cb.lbuffer && ca.rbuffer == cb.rbuffer
+                }
+            };
+            if same_command && same_global && same_regex && same_context {
+                report.errors.push(Conflict {
+                    keyword: a.keyword.clone(),
+                    conflict_type: ConflictType::DuplicateKeyword,
+                    conflicting_command: String::new(),
+                    command_path: None,
+                });
+            }
+        }
+    }
+
+    report
 }
 
 /// Scan $PATH and collect command names
@@ -415,5 +457,80 @@ mod tests {
         let commands = scan_path();
         // At least some commands should exist even in CI environments
         assert!(!commands.is_empty());
+    }
+
+    #[test]
+    fn test_detect_duplicates_same_scope() {
+        let abbrs = vec![
+            make_abbr("p"),
+            Abbreviation {
+                keyword: "p".to_string(),
+                expansion: "prune".to_string(),
+                ..Default::default()
+            },
+        ];
+        let report = detect_duplicates(&abbrs);
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].conflict_type, ConflictType::DuplicateKeyword);
+        assert_eq!(report.errors[0].keyword, "p");
+    }
+
+    #[test]
+    fn test_detect_duplicates_different_command_scope() {
+        let abbrs = vec![
+            Abbreviation {
+                keyword: "co".to_string(),
+                expansion: "checkout".to_string(),
+                command: Some("git".to_string()),
+                ..Default::default()
+            },
+            Abbreviation {
+                keyword: "co".to_string(),
+                expansion: "commit".to_string(),
+                command: Some("svn".to_string()),
+                ..Default::default()
+            },
+        ];
+        let report = detect_duplicates(&abbrs);
+        assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn test_detect_duplicates_different_context() {
+        let abbrs = vec![
+            Abbreviation {
+                keyword: "main".to_string(),
+                expansion: "main --branch".to_string(),
+                context: Some(crate::config::AbbreviationContext {
+                    lbuffer: Some("^git checkout".to_string()),
+                    rbuffer: None,
+                }),
+                ..Default::default()
+            },
+            Abbreviation {
+                keyword: "main".to_string(),
+                expansion: "main --verbose".to_string(),
+                context: Some(crate::config::AbbreviationContext {
+                    lbuffer: Some("^git switch".to_string()),
+                    rbuffer: None,
+                }),
+                ..Default::default()
+            },
+        ];
+        let report = detect_duplicates(&abbrs);
+        assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn test_duplicate_display() {
+        let conflict = Conflict {
+            keyword: "p".to_string(),
+            conflict_type: ConflictType::DuplicateKeyword,
+            conflicting_command: String::new(),
+            command_path: None,
+        };
+        let display = conflict.to_string();
+        assert!(display.contains("\"p\""));
+        assert!(display.contains("multiple times"));
     }
 }

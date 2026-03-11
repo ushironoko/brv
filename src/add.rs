@@ -4,7 +4,7 @@ use crossterm::terminal;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::config;
+use crate::{compiler, config};
 
 /// Parameters for adding a new abbreviation
 pub struct AddParams {
@@ -64,6 +64,9 @@ pub fn append_to_config(path: &Path, params: &AddParams) -> Result<()> {
             );
         }
     }
+
+    // Check for PATH/builtin conflicts
+    compiler::check_single_conflict(&params.keyword, params.allow_conflict)?;
 
     let entry = build_toml_entry(params);
 
