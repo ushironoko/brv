@@ -3,7 +3,7 @@ name: release
 description: abbrsのバージョン更新、GitHubリリース、crates.io publishを実行する。
 user_invocable: true
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(cargo test *), Bash(gh workflow run *), Bash(gh run *), Edit, Read, Grep, Glob
+allowed-tools: Bash(git status *), Bash(git branch *), Bash(git tag *), Bash(git add *), Bash(git commit *), Bash(git push *), Bash(git rev-parse *), Bash(cargo test *), Bash(gh workflow run *), Bash(gh run *), Edit, Read, Grep, Glob
 ---
 
 # Release Workflow
