@@ -59,14 +59,16 @@ abbrsのリリース手順を実行するスキル。
    cargo test
    ```
    - 失敗した場合は中断
+   - `cargo test` により `Cargo.lock` が更新される
 
 ### Phase 3: コミット & プッシュ
 
 1. **変更をコミット**
    ```bash
-   git add Cargo.toml
+   git add Cargo.toml Cargo.lock
    git commit -m "chore: bump version to {version}"
    ```
+   - **重要**: `Cargo.lock` も必ずコミットすること。CIの `cargo publish --dry-run` が未コミットファイルを検出して失敗する。
 
 2. **mainブランチにプッシュ**
    ```bash
