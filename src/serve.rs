@@ -311,7 +311,7 @@ pub fn run(cache_path: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<
 /// a 0700 directory, no other process can swap in a non-socket between
 /// our check and unlink.
 fn ensure_private_socket_dir(socket_path: &std::path::Path) -> Result<()> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 
     let parent = socket_path
         .parent()
@@ -319,10 +319,12 @@ fn ensure_private_socket_dir(socket_path: &std::path::Path) -> Result<()> {
 
     let our_uid = unsafe { libc::getuid() };
 
-    match std::fs::create_dir(parent) {
+    match std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(parent)
+    {
         Ok(()) => {
-            // We just created it — set restrictive permissions
-            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            // Created atomically with mode 0700 — no TOCTOU window
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // Directory exists — verify it's safe

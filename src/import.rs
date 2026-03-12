@@ -94,7 +94,12 @@ pub fn import_fish(content: &str, config_path: &Path) -> Result<ImportResult> {
                     context_rbuffer: None,
                 };
                 match add::append_to_config(config_path, &params) {
-                    Ok(()) => result.imported += 1,
+                    Ok(()) => {
+                        result.imported += 1;
+                        if attrs.is_function {
+                            result.function_count += 1;
+                        }
+                    }
                     Err(e) => result.skipped.push(format!("{} ({})", line, e)),
                 }
             }
@@ -309,7 +314,12 @@ pub fn import_git_aliases(
                     context_rbuffer: None,
                 };
                 match add::append_to_config(config_path, &params) {
-                    Ok(()) => result.imported += 1,
+                    Ok(()) => {
+                        result.imported += 1;
+                        if evaluate {
+                            result.evaluate_count += 1;
+                        }
+                    }
                     Err(e) => result.skipped.push(format!("{} ({})", line, e)),
                 }
             } else {
@@ -332,6 +342,10 @@ pub fn export(config_path: &Path) -> Result<Vec<String>> {
 pub struct ImportResult {
     pub imported: usize,
     pub skipped: Vec<String>,
+    /// Number of imported abbreviations with `evaluate = true` (shell command execution)
+    pub evaluate_count: usize,
+    /// Number of imported abbreviations with `function = true` (shell function call)
+    pub function_count: usize,
 }
 
 #[cfg(test)]
