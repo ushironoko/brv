@@ -401,6 +401,23 @@ abbrs-prev-candidate() {
   fi
 }
 
+# Show expansion history and enter candidate cycling
+abbrs-history() {
+  if (( _ABBRS_CYCLING )); then
+    _abbrs_clear_candidates 1
+  fi
+
+  if _abbrs_request "history"; then
+    if [[ ${_abbrs_reply[1]} == "candidates" ]]; then
+      _abbrs_handle_expand_response "${_abbrs_reply[@]}"
+    else
+      zle -M "abbrs: no expansion history"
+    fi
+  else
+    zle -M "abbrs: history requires serve mode"
+  fi
+}
+
 # Literal space (no expansion)
 abbrs-literal-space() {
   _abbrs_clear_candidates 1
@@ -413,6 +430,7 @@ zle -N abbrs-expand-accept
 zle -N abbrs-next-placeholder
 zle -N abbrs-prev-candidate
 zle -N abbrs-literal-space
+zle -N abbrs-history
 
 # Key bindings
 bindkey " " abbrs-expand-space
@@ -420,12 +438,13 @@ bindkey "^M" abbrs-expand-accept
 bindkey "^I" abbrs-next-placeholder
 bindkey "^[[Z" abbrs-prev-candidate
 bindkey "^ " abbrs-literal-space
+bindkey "^X^H" abbrs-history
 
 # Cancel candidate cycling on any non-abbrs keypress
 _abbrs_check_cycling() {
   if (( _ABBRS_CYCLING )); then
     case "$LASTWIDGET" in
-      abbrs-expand-space|abbrs-expand-accept|abbrs-next-placeholder|abbrs-prev-candidate|abbrs-literal-space)
+      abbrs-expand-space|abbrs-expand-accept|abbrs-next-placeholder|abbrs-prev-candidate|abbrs-literal-space|abbrs-history)
         ;;
       *)
         # Accept current candidate (don't restore) so the user's keystroke is preserved.
@@ -446,11 +465,11 @@ else
   zle -N zle-line-pre-redraw _abbrs_check_cycling
 fi
 
-# Start serve process on load (socket mode if zsocket available, otherwise per-process fallback)
-if zmodload zsh/net/socket 2>/dev/null; then
+# Start serve process on load (socket mode if zsocket available and serve enabled)
+if zmodload zsh/net/socket 2>/dev/null && $_ABBRS_BIN _serve-enabled 2>/dev/null; then
   _abbrs_start_serve
 else
-  # zsocket not available — per-process fallback only (no background daemon)
+  # zsocket not available or serve disabled — per-process fallback only (no background daemon)
   # _abbrs_request will always fail, so widgets fall through to _abbrs_*_fallback
   :
 fi
@@ -473,6 +492,7 @@ _abbrs() {
     'remind:Check for abbreviation reminders'
     'import:Import abbreviations'
     'export:Export abbreviations'
+    'history:Manage expansion history'
     'serve:Start serve mode'
   )
 
@@ -579,6 +599,22 @@ _abbrs() {
         local -a targets=('zsh:Output zsh integration script' 'config:Generate config template')
         _describe 'target' targets
       fi
+      ;;
+    history)
+      if (( CURRENT == 3 )); then
+        local -a actions=('list:List recent expansion history' 'clear:Clear all expansion history')
+        _describe 'action' actions
+        return
+      fi
+      case $words[3] in
+        list)
+          _arguments -s \
+            '-n=[Maximum entries]:limit:' \
+            '--limit=[Maximum entries]:limit:' \
+            '--config=[Config file path]:config file:_files' \
+            '*:' && return
+          ;;
+      esac
       ;;
     import)
       if (( CURRENT == 3 )); then

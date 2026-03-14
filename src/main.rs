@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use abbrs::{add, cache, compiler, config, context, expand, import, manage, output, placeholder, serve};
+use abbrs::{add, cache, compiler, config, context, expand, history, import, manage, output, placeholder, serve};
 
 #[derive(Parser, Debug)]
 #[command(name = "abbrs")]
@@ -218,6 +218,20 @@ enum Commands {
         config: Option<PathBuf>,
     },
 
+    /// Check if serve mode is enabled in config (internal use)
+    #[command(hide = true, name = "_serve-enabled")]
+    ServeEnabled {
+        /// Config file path
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+
+    /// Manage expansion history
+    History {
+        #[command(subcommand)]
+        action: HistoryAction,
+    },
+
     /// Start long-running serve mode (pipe or socket communication)
     Serve {
         /// Unix domain socket path (if omitted, uses stdin/stdout pipe mode)
@@ -267,6 +281,22 @@ enum ImportSource {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum HistoryAction {
+    /// List recent expansion history
+    List {
+        /// Maximum number of entries to show
+        #[arg(long, short = 'n', default_value = "50")]
+        limit: usize,
+
+        /// Config file path
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Clear all expansion history
+    Clear,
 }
 
 fn main() -> Result<()> {
@@ -341,6 +371,8 @@ fn main() -> Result<()> {
         Commands::Import { source } => cmd_import(source),
         Commands::Export { config: cfg } => cmd_export(cfg),
         Commands::ListKeywords { config: cfg } => cmd_list_keywords(cfg),
+        Commands::ServeEnabled { config: cfg } => cmd_serve_enabled(cfg),
+        Commands::History { action } => cmd_history(action),
         Commands::Serve { socket, cache, config } => match socket {
             Some(sock_path) => serve::run_socket(sock_path, cache, config),
             None => serve::run(cache, config),
@@ -737,6 +769,20 @@ fn cmd_list_keywords(cfg: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+fn cmd_serve_enabled(cfg: Option<PathBuf>) -> Result<()> {
+    let config_path = resolve_config_path(cfg)?;
+    if !config_path.exists() {
+        // No config file — default is serve enabled
+        std::process::exit(0);
+    }
+    let cfg = config::load(&config_path)?;
+    if cfg.settings.serve {
+        std::process::exit(0);
+    } else {
+        std::process::exit(1);
+    }
+}
+
 fn cmd_export(cfg: Option<PathBuf>) -> Result<()> {
     let config_path = resolve_config_path(cfg)?;
     require_config(&config_path)?;
@@ -794,6 +840,7 @@ fn cmd_init_config() -> Result<()> {
 # See: https://github.com/ushironoko/abbrs
 
 [settings]
+# serve = true  # enable daemon mode for sub-millisecond latency (default: true)
 # prefixes = ["sudo", "doas"]  # commands that preserve command position
 # remind = false  # remind when abbreviation could have been used
 
@@ -839,4 +886,66 @@ expansion = "git push"
     std::fs::write(&config_path, template)?;
     eprintln!("✓ generated config file: {}", config_path.display());
     Ok(())
+}
+
+fn cmd_history(action: HistoryAction) -> Result<()> {
+    let history_path = history::default_history_path()?;
+
+    match action {
+        HistoryAction::List { limit, config: cfg } => {
+            let config_path = resolve_config_path(cfg)?;
+            let max_limit = if config_path.exists() {
+                config::load(&config_path)
+                    .map(|c| c.settings.history_limit)
+                    .unwrap_or(500)
+            } else {
+                500
+            };
+            let effective_limit = limit.min(max_limit);
+
+            let entries = history::load(&history_path, effective_limit)?;
+
+            if entries.is_empty() {
+                eprintln!("(no expansion history)");
+                return Ok(());
+            }
+
+            println!("{:<20} {:<15} {}", "TIMESTAMP", "KEYWORD", "EXPANSION");
+            println!("{}", "-".repeat(60));
+
+            for entry in &entries {
+                let datetime = format_timestamp(entry.timestamp);
+                println!("{:<20} {:<15} {}", datetime, entry.keyword, entry.expansion);
+            }
+
+            eprintln!("\n{} entries", entries.len());
+            Ok(())
+        }
+        HistoryAction::Clear => {
+            history::clear(&history_path)?;
+            eprintln!("✓ expansion history cleared");
+            Ok(())
+        }
+    }
+}
+
+fn format_timestamp(ts: u64) -> String {
+    use std::time::{Duration, UNIX_EPOCH};
+    let dt = UNIX_EPOCH + Duration::from_secs(ts);
+    // Format as local time using chrono-free approach
+    match dt.elapsed() {
+        Ok(elapsed) => {
+            let secs = elapsed.as_secs();
+            if secs < 60 {
+                "just now".to_string()
+            } else if secs < 3600 {
+                format!("{}m ago", secs / 60)
+            } else if secs < 86400 {
+                format!("{}h ago", secs / 3600)
+            } else {
+                format!("{}d ago", secs / 86400)
+            }
+        }
+        Err(_) => ts.to_string(),
+    }
 }
