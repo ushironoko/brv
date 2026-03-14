@@ -368,14 +368,17 @@ _abbrs_expand_with_fallback() {
     if [[ ${_abbrs_reply[1]} == stale_cache ]]; then
       $_ABBRS_BIN compile 2>/dev/null
       _abbrs_refresh_serve
-      _abbrs_request "reload"
-      if _abbrs_request $'expand\t'"${LBUFFER}"$'\t'"${RBUFFER}"; then
-        "$handler" "${_abbrs_reply[@]}"
-      else
-        local -a fb
-        fb=( "${(f)$(_abbrs_expand_fallback)}" )
-        "$handler" "${fb[@]}"
+      if (( _ABBRS_SERVE_ENABLED )); then
+        _abbrs_request "reload"
+        if _abbrs_request $'expand\t'"${LBUFFER}"$'\t'"${RBUFFER}"; then
+          "$handler" "${_abbrs_reply[@]}"
+          return
+        fi
       fi
+      # Serve now disabled or daemon retry failed — use fallback
+      local -a fb
+      fb=( "${(f)$(_abbrs_expand_fallback)}" )
+      "$handler" "${fb[@]}"
     else
       "$handler" "${_abbrs_reply[@]}"
     fi
