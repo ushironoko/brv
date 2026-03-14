@@ -110,6 +110,13 @@ impl ServeState {
     }
 
     fn load_cache(&mut self) {
+        if !self.config_path.exists() {
+            // Config deleted — clear compiled state so no stale abbreviations are served
+            self.compiled = None;
+            self.config_mtime = None;
+            return;
+        }
+
         match cache::read(&self.cache_path) {
             Ok(c) => {
                 self.config_mtime = std::fs::metadata(&self.config_path)
@@ -127,6 +134,15 @@ impl ServeState {
         let current_mtime = std::fs::metadata(&self.config_path)
             .and_then(|m| m.modified())
             .ok();
+
+        // Config file deleted — clear compiled state
+        if current_mtime.is_none() {
+            if self.compiled.is_some() {
+                self.compiled = None;
+                self.config_mtime = None;
+            }
+            return false;
+        }
 
         // If mtime hasn't changed, cache is still fresh
         if current_mtime == self.config_mtime {

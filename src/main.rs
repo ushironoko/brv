@@ -429,12 +429,16 @@ fn cmd_expand(
     };
 
     // Freshness check
-    if config_path.exists() {
-        if let Ok(fresh) = cache::is_fresh(&compiled, &config_path) {
-            if !fresh {
-                println!("{}", output::ExpandOutput::StaleCache);
-                return Ok(());
-            }
+    if !config_path.exists() {
+        // Config deleted — no abbreviations should be active
+        println!("{}", output::ExpandOutput::NoMatch);
+        return Ok(());
+    }
+
+    if let Ok(fresh) = cache::is_fresh(&compiled, &config_path) {
+        if !fresh {
+            println!("{}", output::ExpandOutput::StaleCache);
+            return Ok(());
         }
     }
 
