@@ -91,6 +91,9 @@ _abbrs_stop_serve() {
   command rm -f "$_ABBRS_SOCK"
 }
 
+# Ensure add-zsh-hook is available (not all zsh setups autoload it)
+autoload -Uz +X add-zsh-hook 2>/dev/null
+
 if (( $+functions[add-zsh-hook] )); then
   add-zsh-hook zshexit _abbrs_stop_serve
 else
@@ -117,6 +120,9 @@ _abbrs_precmd_check() {
 
 if (( $+functions[add-zsh-hook] )); then
   add-zsh-hook precmd _abbrs_precmd_check
+else
+  # Fallback for environments where add-zsh-hook is not available
+  precmd_functions+=( _abbrs_precmd_check )
 fi
 
 # Re-evaluate settings.serve after config recompilation.
