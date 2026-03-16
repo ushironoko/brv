@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use abbrs::{add, cache, compiler, config, context, expand, import, manage, output, placeholder, serve};
+use abbrs::{add, cache, compiler, config, context, expand, history, import, manage, output, placeholder, serve};
 
 #[derive(Parser, Debug)]
 #[command(name = "abbrs")]
@@ -226,6 +226,12 @@ enum Commands {
         config: Option<PathBuf>,
     },
 
+    /// Manage expansion history
+    History {
+        #[command(subcommand)]
+        action: HistoryAction,
+    },
+
     /// Start long-running serve mode (pipe or socket communication)
     Serve {
         /// Unix domain socket path (if omitted, uses stdin/stdout pipe mode)
@@ -275,6 +281,22 @@ enum ImportSource {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum HistoryAction {
+    /// List recent expansion history
+    List {
+        /// Maximum number of entries to show
+        #[arg(long, short = 'n', default_value = "50")]
+        limit: usize,
+
+        /// Config file path
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Clear all expansion history
+    Clear,
 }
 
 fn main() -> Result<()> {
@@ -350,6 +372,7 @@ fn main() -> Result<()> {
         Commands::Export { config: cfg } => cmd_export(cfg),
         Commands::ListKeywords { config: cfg } => cmd_list_keywords(cfg),
         Commands::ServeEnabled { config: cfg } => cmd_serve_enabled(cfg),
+        Commands::History { action } => cmd_history(action),
         Commands::Serve { socket, cache, config } => match socket {
             Some(sock_path) => serve::run_socket(sock_path, cache, config),
             None => serve::run(cache, config),
@@ -418,7 +441,7 @@ fn cmd_expand(
     let regex_cache = context::RegexCache::new();
     let input = expand::ExpandInput { lbuffer, rbuffer };
     let result = expand::expand(&input, &compiled.matcher, &compiled.settings.prefixes, &regex_cache);
-    println!("{}", result);
+    println!("{}", result.output);
 
     Ok(())
 }
@@ -863,4 +886,71 @@ expansion = "git push"
     std::fs::write(&config_path, template)?;
     eprintln!("✓ generated config file: {}", config_path.display());
     Ok(())
+}
+
+fn cmd_history(action: HistoryAction) -> Result<()> {
+    let history_path = history::default_history_path()?;
+
+    match action {
+        HistoryAction::List { limit, config: cfg } => {
+            // Flush all running daemon buffers so the file is up to date
+            serve::notify_all_daemons("flush_history");
+
+            let config_path = resolve_config_path(cfg)?;
+            let max_limit = if config_path.exists() {
+                config::load(&config_path)
+                    .map(|c| c.settings.history_limit)
+                    .unwrap_or(500)
+            } else {
+                500
+            };
+            let effective_limit = limit.min(max_limit);
+
+            let entries = history::load(&history_path, effective_limit)?;
+
+            if entries.is_empty() {
+                eprintln!("(no expansion history)");
+                return Ok(());
+            }
+
+            println!("{:<20} {:<15} {}", "TIMESTAMP", "KEYWORD", "EXPANSION");
+            println!("{}", "-".repeat(60));
+
+            for entry in &entries {
+                let datetime = format_timestamp(entry.timestamp);
+                println!("{:<20} {:<15} {}", datetime, entry.keyword, entry.expansion);
+            }
+
+            eprintln!("\n{} entries", entries.len());
+            Ok(())
+        }
+        HistoryAction::Clear => {
+            // Clear all running daemon buffers and the file
+            serve::notify_all_daemons("clear_history");
+            history::clear(&history_path)?;
+            eprintln!("✓ expansion history cleared");
+            Ok(())
+        }
+    }
+}
+
+fn format_timestamp(ts: u64) -> String {
+    use std::time::{Duration, UNIX_EPOCH};
+    let dt = UNIX_EPOCH + Duration::from_secs(ts);
+    // Format as local time using chrono-free approach
+    match dt.elapsed() {
+        Ok(elapsed) => {
+            let secs = elapsed.as_secs();
+            if secs < 60 {
+                "just now".to_string()
+            } else if secs < 3600 {
+                format!("{}m ago", secs / 60)
+            } else if secs < 86400 {
+                format!("{}h ago", secs / 3600)
+            } else {
+                format!("{}d ago", secs / 86400)
+            }
+        }
+        Err(_) => ts.to_string(),
+    }
 }

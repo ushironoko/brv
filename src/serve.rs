@@ -1,7 +1,8 @@
 use crate::cache::{self, CompiledCache};
 use crate::context::RegexCache;
-use crate::expand::{self, ExpandInput};
-use crate::output::PlaceholderOutput;
+use crate::expand::{self, ExpandInput, ExpandResult};
+use crate::history::{self, HistoryEntry};
+use crate::output::{CandidateEntry, ExpandOutput, PlaceholderOutput};
 use crate::placeholder;
 use anyhow::Result;
 use std::io::{BufRead, BufReader, LineWriter, Write};
@@ -15,6 +16,9 @@ enum Request {
     Expand { lbuffer: String, rbuffer: String },
     Placeholder { lbuffer: String, rbuffer: String },
     Remind { buffer: String },
+    History { limit: usize },
+    FlushHistory,
+    ClearHistory,
     Reload,
     Ping,
 }
@@ -53,11 +57,22 @@ fn parse_request(line: &str) -> Result<Request> {
                 .to_string();
             Ok(Request::Remind { buffer })
         }
+        "history" => {
+            let limit: usize = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(50);
+            Ok(Request::History { limit })
+        }
+        "flush_history" => Ok(Request::FlushHistory),
+        "clear_history" => Ok(Request::ClearHistory),
         "reload" => Ok(Request::Reload),
         "ping" => Ok(Request::Ping),
         other => anyhow::bail!("unknown command: {}", other),
     }
 }
+
+const HISTORY_FLUSH_THRESHOLD: usize = 10;
 
 struct ServeState {
     compiled: Option<CompiledCache>,
@@ -65,16 +80,32 @@ struct ServeState {
     config_path: PathBuf,
     cache_path: PathBuf,
     config_mtime: Option<SystemTime>,
+    history_path: PathBuf,
+    history_enabled: bool,
+    history_limit: usize,
+    history_buffer: Vec<HistoryEntry>,
 }
 
 impl ServeState {
     fn new(cache_path: PathBuf, config_path: PathBuf) -> Self {
+        // Read history settings from config
+        let (history_enabled, history_limit) = crate::config::load(&config_path)
+            .map(|cfg| (cfg.settings.history, cfg.settings.history_limit))
+            .unwrap_or((true, 500));
+
+        let history_path = history::default_history_path()
+            .unwrap_or_else(|_| PathBuf::from("/tmp/abbrs-history"));
+
         Self {
             compiled: None,
             regex_cache: RegexCache::new(),
             config_path,
             cache_path,
             config_mtime: None,
+            history_path,
+            history_enabled,
+            history_limit,
+            history_buffer: Vec::new(),
         }
     }
 
@@ -120,6 +151,11 @@ impl ServeState {
                     if fresh {
                         self.compiled = Some(c);
                         self.config_mtime = current_mtime;
+                        // Refresh history settings from config on hot-reload
+                        if let Ok(cfg) = crate::config::load(&self.config_path) {
+                            self.history_enabled = cfg.settings.history;
+                            self.history_limit = cfg.settings.history_limit;
+                        }
                         return true;
                     }
                 }
@@ -142,14 +178,14 @@ fn write_empty_eor<W: Write>(writer: &mut W) -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_expand<W: Write>(state: &mut ServeState, lbuffer: &str, rbuffer: &str, writer: &mut W) -> std::io::Result<()> {
+fn handle_expand(state: &mut ServeState, lbuffer: &str, rbuffer: &str) -> ExpandResult {
     if state.compiled.is_none() {
-        return write_response(writer, "stale_cache");
+        return ExpandResult { output: ExpandOutput::StaleCache, matched_expansion: None };
     }
 
     // Check freshness
     if !state.check_and_reload_if_needed() {
-        return write_response(writer, "stale_cache");
+        return ExpandResult { output: ExpandOutput::StaleCache, matched_expansion: None };
     }
 
     let compiled = state.compiled.as_ref().unwrap();
@@ -158,8 +194,56 @@ fn handle_expand<W: Write>(state: &mut ServeState, lbuffer: &str, rbuffer: &str,
         lbuffer: lbuffer.to_string(),
         rbuffer: rbuffer.to_string(),
     };
-    let result = expand::expand(&input, &compiled.matcher, &compiled.settings.prefixes, &state.regex_cache);
-    write_response(writer, &result.to_string())
+    expand::expand(&input, &compiled.matcher, &compiled.settings.prefixes, &state.regex_cache)
+}
+
+fn flush_history_buffer(state: &mut ServeState) {
+    if state.history_buffer.is_empty() {
+        return;
+    }
+    match history::flush_batch(&state.history_path, &state.history_buffer) {
+        Ok(()) => {
+            state.history_buffer.clear();
+        }
+        Err(e) => {
+            eprintln!("abbrs serve: failed to flush history (retaining buffer): {}", e);
+        }
+    }
+}
+
+fn handle_history<W: Write>(state: &mut ServeState, limit: usize, writer: &mut W) -> std::io::Result<()> {
+    if !state.history_enabled {
+        return write_response(writer, "no_match");
+    }
+
+    // Flush pending entries before reading
+    flush_history_buffer(state);
+
+    let limit = if limit == 0 { state.history_limit } else { limit };
+
+    let entries = match history::load(&state.history_path, limit) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("abbrs serve: failed to load history: {}", e);
+            return write_response(writer, "no_match");
+        }
+    };
+
+    if entries.is_empty() {
+        return write_response(writer, "no_match");
+    }
+
+    // Format as candidates protocol
+    let candidates: Vec<CandidateEntry> = entries
+        .into_iter()
+        .map(|e| CandidateEntry {
+            keyword: e.keyword,
+            expansion: e.expansion,
+        })
+        .collect();
+
+    let output = ExpandOutput::Candidates { candidates };
+    write_response(writer, &output.to_string())
 }
 
 fn handle_placeholder<W: Write>(lbuffer: &str, rbuffer: &str, writer: &mut W) -> std::io::Result<()> {
@@ -228,6 +312,61 @@ fn resolve_paths(
     Ok((cache_file, cfg_path))
 }
 
+/// Process a single parsed request against state and write the response.
+fn process_request<W: Write>(
+    state: &mut ServeState,
+    request: &Request,
+    writer: &mut W,
+) -> std::io::Result<()> {
+    match request {
+        Request::Expand { lbuffer, rbuffer } => {
+            let result = handle_expand(state, lbuffer, rbuffer);
+
+            // Record history using the exact matched expansion (not re-derived)
+            if state.history_enabled {
+                if let Some(expansion) = &result.matched_expansion {
+                    if let Some((_, keyword)) = expand::extract_keyword(lbuffer) {
+                        state.history_buffer.push(HistoryEntry::new(keyword.to_string(), expansion.clone()));
+                        if state.history_buffer.len() >= HISTORY_FLUSH_THRESHOLD {
+                            flush_history_buffer(state);
+                        }
+                    }
+                }
+            }
+
+            write_response(writer, &result.output.to_string())
+        }
+        Request::Placeholder { lbuffer, rbuffer } => {
+            handle_placeholder(lbuffer, rbuffer, writer)
+        }
+        Request::Remind { buffer } => {
+            handle_remind(state, buffer, writer)
+        }
+        Request::History { limit } => {
+            handle_history(state, *limit, writer)
+        }
+        Request::FlushHistory => {
+            flush_history_buffer(state);
+            write_response(writer, "ok")
+        }
+        Request::ClearHistory => {
+            state.history_buffer.clear();
+            let _ = history::clear(&state.history_path);
+            write_response(writer, "ok")
+        }
+        Request::Reload => {
+            flush_history_buffer(state);
+            // Re-read history settings from config on reload
+            if let Ok(cfg) = crate::config::load(&state.config_path) {
+                state.history_enabled = cfg.settings.history;
+                state.history_limit = cfg.settings.history_limit;
+            }
+            handle_reload(state, writer)
+        }
+        Request::Ping => handle_ping(writer),
+    }
+}
+
 fn serve_connection<R: BufRead, W: Write>(
     state: &mut ServeState,
     reader: R,
@@ -238,7 +377,7 @@ fn serve_connection<R: BufRead, W: Write>(
             Ok(l) => l,
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    return Ok(());
+                    break;
                 }
                 eprintln!("abbrs serve: read error: {}", e);
                 continue;
@@ -258,7 +397,7 @@ fn serve_connection<R: BufRead, W: Write>(
                 );
                 if let Err(write_err) = result {
                     if write_err.kind() == std::io::ErrorKind::BrokenPipe {
-                        return Ok(());
+                        break;
                     }
                     eprintln!("abbrs serve: write error: {}", write_err);
                 }
@@ -266,27 +405,81 @@ fn serve_connection<R: BufRead, W: Write>(
             }
         };
 
-        let result = match request {
-            Request::Expand { lbuffer, rbuffer } => {
-                handle_expand(state, &lbuffer, &rbuffer, writer)
-            }
-            Request::Placeholder { lbuffer, rbuffer } => {
-                handle_placeholder(&lbuffer, &rbuffer, writer)
-            }
-            Request::Remind { buffer } => {
-                handle_remind(state, &buffer, writer)
-            }
-            Request::Reload => handle_reload(state, writer),
-            Request::Ping => handle_ping(writer),
-        };
+        let result = process_request(state, &request, writer);
 
         if let Err(e) = result {
             if e.kind() == std::io::ErrorKind::BrokenPipe {
-                return Ok(());
+                break;
             }
             eprintln!("abbrs serve: write error: {}", e);
         }
     }
+
+    // Flush remaining history buffer on disconnect
+    flush_history_buffer(state);
+
+    Ok(())
+}
+
+/// Serve a single connection using shared state (for multi-threaded socket mode).
+/// Locks the mutex per-request so other connections can interleave.
+fn serve_connection_shared<R: BufRead, W: Write>(
+    state: &std::sync::Arc<std::sync::Mutex<ServeState>>,
+    reader: R,
+    writer: &mut W,
+) -> Result<()> {
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    break;
+                }
+                eprintln!("abbrs serve: read error: {}", e);
+                continue;
+            }
+        };
+
+        if line.is_empty() {
+            continue;
+        }
+
+        let request = match parse_request(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                let result = write_response(
+                    writer,
+                    &format!("error\t{}", e),
+                );
+                if let Err(write_err) = result {
+                    if write_err.kind() == std::io::ErrorKind::BrokenPipe {
+                        break;
+                    }
+                    eprintln!("abbrs serve: write error: {}", write_err);
+                }
+                continue;
+            }
+        };
+
+        // Lock state only for the duration of request processing.
+        // Between requests (while waiting for the next line), the lock is released,
+        // allowing other connections (e.g. notify_all_daemons) to be served.
+        let result = {
+            let mut state = state.lock().unwrap();
+            process_request(&mut state, &request, writer)
+        };
+
+        if let Err(e) = result {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                break;
+            }
+            eprintln!("abbrs serve: write error: {}", e);
+        }
+    }
+
+    // Flush remaining history buffer on disconnect
+    let mut state = state.lock().unwrap();
+    flush_history_buffer(&mut state);
 
     Ok(())
 }
@@ -296,6 +489,11 @@ pub fn run(cache_path: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<
 
     let mut state = ServeState::new(cache_file, cfg_path);
     state.load_cache();
+
+    // Compact history at daemon startup
+    if state.history_enabled {
+        let _ = history::compact(&state.history_path, state.history_limit);
+    }
 
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
@@ -366,6 +564,7 @@ pub fn run_socket(
 ) -> Result<()> {
     use std::os::unix::fs::FileTypeExt;
     use std::os::unix::net::{UnixListener, UnixStream};
+    use std::sync::{Arc, Mutex};
 
     let (cache_file, cfg_path) = resolve_paths(cache_path, config_path)?;
 
@@ -403,6 +602,17 @@ pub fn run_socket(
     let mut state = ServeState::new(cache_file, cfg_path);
     state.load_cache();
 
+    // Compact history at daemon startup
+    if state.history_enabled {
+        let _ = history::compact(&state.history_path, state.history_limit);
+    }
+
+    // Wrap state in Arc<Mutex> for concurrent connection handling.
+    // This allows notify_all_daemons() to reach the daemon even while
+    // a shell connection is active, by serving each connection in its
+    // own thread with per-request locking.
+    let state = Arc::new(Mutex::new(state));
+
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -411,17 +621,73 @@ pub fn run_socket(
                 continue;
             }
         };
-        let reader = BufReader::new(stream.try_clone()?);
-        let mut writer = LineWriter::new(stream);
-        if let Err(e) = serve_connection(&mut state, reader, &mut writer) {
-            eprintln!("abbrs serve: connection error: {}", e);
-        }
-        // EOF → accept next connection (reconnect support)
-        // state is preserved across connections (RegexCache reuse etc.)
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || {
+            let reader = match stream.try_clone() {
+                Ok(s) => BufReader::new(s),
+                Err(e) => {
+                    eprintln!("abbrs serve: clone error: {}", e);
+                    return;
+                }
+            };
+            let mut writer = LineWriter::new(stream);
+            if let Err(e) = serve_connection_shared(&state, reader, &mut writer) {
+                eprintln!("abbrs serve: connection error: {}", e);
+            }
+        });
     }
 
     let _ = std::fs::remove_file(&socket_path);
     Ok(())
+}
+
+/// Get the default socket directory path (matches zsh widget convention).
+pub fn default_socket_dir() -> PathBuf {
+    let uid = unsafe { libc::getuid() };
+    let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(format!("{}/abbrs-{}", tmpdir, uid))
+}
+
+/// Send a command to a single daemon socket and wait for the response.
+fn send_to_daemon(socket_path: &std::path::Path, command: &str) -> Result<()> {
+    use std::os::unix::net::UnixStream;
+
+    let stream = UnixStream::connect(socket_path)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(2)))?;
+
+    let read_stream = stream.try_clone()?;
+    let mut writer = LineWriter::new(stream);
+    writeln!(writer, "{}", command)?;
+    writer.flush()?;
+
+    // Read until EOR
+    let reader = BufReader::new(read_stream);
+    for line in reader.lines() {
+        let line = line?;
+        if line.starts_with('\x1e') {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// Send a command to all active daemon sockets in the socket directory.
+/// Silently ignores connection failures (stale sockets, etc.).
+pub fn notify_all_daemons(command: &str) {
+    let sock_dir = default_socket_dir();
+    if !sock_dir.exists() {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(&sock_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "sock") {
+                let _ = send_to_daemon(&path, command);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -638,9 +904,8 @@ mod tests {
     #[test]
     fn test_handle_expand_regular() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "g", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "g", "");
+        assert_snapshot!(output.to_string(), @r"
         success
         git
         3
@@ -650,9 +915,8 @@ mod tests {
     #[test]
     fn test_handle_expand_with_placeholder() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "gc", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "gc", "");
+        assert_snapshot!(output.to_string(), @r"
         success
         git commit -m ''
         15
@@ -662,9 +926,8 @@ mod tests {
     #[test]
     fn test_handle_expand_global() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "echo NE", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "echo NE", "");
+        assert_snapshot!(output.to_string(), @r"
         success
         echo 2>/dev/null
         16
@@ -674,9 +937,8 @@ mod tests {
     #[test]
     fn test_handle_expand_evaluate() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "echo TODAY", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "echo TODAY", "");
+        assert_snapshot!(output.to_string(), @r"
         evaluate
         date +%Y-%m-%d
         echo
@@ -687,9 +949,8 @@ mod tests {
     #[test]
     fn test_handle_expand_no_match() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "unknown", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @"no_match");
+        let output = handle_expand(&mut state, "unknown", "");
+        assert_snapshot!(output.to_string(), @"no_match");
     }
 
     #[test]
@@ -712,9 +973,8 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "g", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "g", "");
+        assert_snapshot!(output.to_string(), @r"
         candidates
         3
         gc	git commit
@@ -733,9 +993,8 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "g", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "g", "");
+        assert_snapshot!(output.to_string(), @r"
         candidates
         1
         gc	git commit
@@ -745,10 +1004,9 @@ mod tests {
     #[test]
     fn test_handle_expand_exact_match_over_candidates() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let mut buf = Vec::new();
         // "g" has an exact match → expands to "git", not candidates
-        handle_expand(&mut state, "g", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "g", "");
+        assert_snapshot!(output.to_string(), @r"
         success
         git
         3
@@ -758,9 +1016,8 @@ mod tests {
     #[test]
     fn test_handle_expand_with_rbuffer() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "g", " --help", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "g", " --help");
+        assert_snapshot!(output.to_string(), @r"
         success
         git --help
         3
@@ -778,9 +1035,8 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "git co", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "git co", "");
+        assert_snapshot!(output.to_string(), @r"
         success
         git checkout
         12
@@ -798,9 +1054,8 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "npm co", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @"no_match");
+        let output = handle_expand(&mut state, "npm co", "");
+        assert_snapshot!(output.to_string(), @"no_match");
     }
 
     #[test]
@@ -814,9 +1069,8 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "mf", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @r"
+        let output = handle_expand(&mut state, "mf", "");
+        assert_snapshot!(output.to_string(), @r"
         function
         my_func
         mf
@@ -832,9 +1086,8 @@ mod tests {
             dir.path().join("nonexistent.cache"),
             dir.path().join("nonexistent.toml"),
         );
-        let mut buf = Vec::new();
-        handle_expand(&mut state, "g", "", &mut buf).unwrap();
-        assert_snapshot!(response_body(&buf), @"stale_cache");
+        let output = handle_expand(&mut state, "g", "");
+        assert_snapshot!(output.to_string(), @"stale_cache");
     }
 
     #[test]
