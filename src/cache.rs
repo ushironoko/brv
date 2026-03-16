@@ -13,6 +13,7 @@ const CACHE_VERSION: u32 = 4;
 pub struct CachedSettings {
     pub remind: bool,
     pub prefixes: Vec<String>,
+    pub serve: bool,
 }
 
 /// Binary cache
@@ -152,6 +153,7 @@ expansion = "git"
         let settings = CachedSettings {
             remind: true,
             prefixes: vec!["sudo".to_string(), "doas".to_string()],
+            ..Default::default()
         };
         write(&cache_path, &matcher, &settings, &config_path).unwrap();
 
