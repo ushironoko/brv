@@ -2,7 +2,7 @@ use crate::cache::{self, CompiledCache};
 use crate::context::RegexCache;
 use crate::expand::{self, ExpandInput, ExpandResult};
 use crate::history::{self, HistoryEntry};
-use crate::output::{CandidateEntry, ExpandOutput, PlaceholderOutput};
+use crate::output::{self, CandidateEntry, ExpandOutput, PlaceholderOutput};
 use crate::placeholder;
 use anyhow::Result;
 use std::io::{BufRead, BufReader, LineWriter, Write};
@@ -110,6 +110,13 @@ impl ServeState {
     }
 
     fn load_cache(&mut self) {
+        if !self.config_path.exists() {
+            // Config deleted — clear compiled state so no stale abbreviations are served
+            self.compiled = None;
+            self.config_mtime = None;
+            return;
+        }
+
         match cache::read(&self.cache_path) {
             Ok(c) => {
                 self.config_mtime = std::fs::metadata(&self.config_path)
@@ -127,6 +134,15 @@ impl ServeState {
         let current_mtime = std::fs::metadata(&self.config_path)
             .and_then(|m| m.modified())
             .ok();
+
+        // Config file deleted — clear compiled state
+        if current_mtime.is_none() {
+            if self.compiled.is_some() {
+                self.compiled = None;
+                self.config_mtime = None;
+            }
+            return false;
+        }
 
         // If mtime hasn't changed, cache is still fresh
         if current_mtime == self.config_mtime {
@@ -334,7 +350,7 @@ fn process_request<W: Write>(
                 }
             }
 
-            write_response(writer, &result.output.to_string())
+            write_response(writer, &output::format_expand_output(&result.output, state.compiled.as_ref().map_or(0, |c| c.settings.page_size)))
         }
         Request::Placeholder { lbuffer, rbuffer } => {
             handle_placeholder(lbuffer, rbuffer, writer)
@@ -974,7 +990,7 @@ mod tests {
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
         let output = handle_expand(&mut state, "g", "");
-        assert_snapshot!(output.to_string(), @r"
+        assert_snapshot!(output.to_string(), @"
         candidates
         3
         gc	git commit
@@ -994,7 +1010,7 @@ mod tests {
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
         let output = handle_expand(&mut state, "g", "");
-        assert_snapshot!(output.to_string(), @r"
+        assert_snapshot!(output.to_string(), @"
         candidates
         1
         gc	git commit

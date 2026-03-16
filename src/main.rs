@@ -419,6 +419,12 @@ fn cmd_expand(
     let cache_file = resolve_cache_path(cache_path)?;
     let config_path = resolve_config_path(cfg)?;
 
+    // Config deleted — no abbreviations should be active
+    if !config_path.exists() {
+        println!("{}", output::ExpandOutput::NoMatch);
+        return Ok(());
+    }
+
     // Load cache
     let compiled = match cache::read(&cache_file) {
         Ok(c) => c,
@@ -428,20 +434,17 @@ fn cmd_expand(
         }
     };
 
-    // Freshness check
-    if config_path.exists() {
-        if let Ok(fresh) = cache::is_fresh(&compiled, &config_path) {
-            if !fresh {
-                println!("{}", output::ExpandOutput::StaleCache);
-                return Ok(());
-            }
+    if let Ok(fresh) = cache::is_fresh(&compiled, &config_path) {
+        if !fresh {
+            println!("{}", output::ExpandOutput::StaleCache);
+            return Ok(());
         }
     }
 
     let regex_cache = context::RegexCache::new();
     let input = expand::ExpandInput { lbuffer, rbuffer };
     let result = expand::expand(&input, &compiled.matcher, &compiled.settings.prefixes, &regex_cache);
-    println!("{}", result.output);
+    println!("{}", output::format_expand_output(&result.output, compiled.settings.page_size));
 
     Ok(())
 }
@@ -772,8 +775,9 @@ fn cmd_list_keywords(cfg: Option<PathBuf>) -> Result<()> {
 fn cmd_serve_enabled(cfg: Option<PathBuf>) -> Result<()> {
     let config_path = resolve_config_path(cfg)?;
     if !config_path.exists() {
-        // No config file — default is serve enabled
-        std::process::exit(0);
+        // No config file — treat as serve disabled so the shell falls back
+        // to the pure expand path instead of looping compile/reload attempts
+        std::process::exit(1);
     }
     let cfg = config::load(&config_path)?;
     if cfg.settings.serve {
@@ -843,6 +847,7 @@ fn cmd_init_config() -> Result<()> {
 # serve = true  # enable daemon mode for sub-millisecond latency (default: true)
 # prefixes = ["sudo", "doas"]  # commands that preserve command position
 # remind = false  # remind when abbreviation could have been used
+# page_size = 10  # paginate candidate display (0 or omit = show all)
 
 # Regular abbreviation (expand only at command position)
 [[abbr]]

@@ -202,10 +202,13 @@ regex = true
 
 ```toml
 [settings]
+# serve = true      # enable daemon mode for sub-millisecond latency (default: true)
 # prefixes = ["sudo", "doas"]  # commands that preserve command position
-# remind = false  # remind when abbreviation could have been used
-# serve = true  # use persistent daemon mode for sub-100µs latency (set false to use per-process fallback)
+# remind = false     # remind when abbreviation could have been used
+# page_size = 10     # paginate candidate display (0 or omit = show all)
 ```
+
+> **Migration note:** If you upgrade from a version before `serve` / `page_size` support, re-run `eval "$(abbrs init zsh)"` (or re-source your `.zshrc`) so the init script picks up the new protocol fields.
 
 ## Conflict Detection
 
