@@ -188,6 +188,18 @@ expansion = "git commit"
 
 #[test]
 fn test_expand_missing_cache() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("abbrs.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[[abbr]]
+keyword = "g"
+expansion = "git"
+"#,
+    )
+    .unwrap();
+
     abbrs_cmd()
         .args([
             "expand",
@@ -197,6 +209,8 @@ fn test_expand_missing_cache() {
             "",
             "--cache",
             "/nonexistent/abbrs.cache",
+            "--config",
+            config_path.to_str().unwrap(),
         ])
         .assert()
         .success()
