@@ -194,13 +194,8 @@ fn write_empty_eor<W: Write>(writer: &mut W) -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_expand(state: &mut ServeState, lbuffer: &str, rbuffer: &str) -> ExpandResult {
-    if state.compiled.is_none() {
-        return ExpandResult { output: ExpandOutput::StaleCache, matched_expansion: None };
-    }
-
-    // Check freshness
-    if !state.check_and_reload_if_needed() {
+fn handle_expand(state: &mut ServeState, lbuffer: &str, rbuffer: &str, cache_fresh: bool) -> ExpandResult {
+    if state.compiled.is_none() || !cache_fresh {
         return ExpandResult { output: ExpandOutput::StaleCache, matched_expansion: None };
     }
 
@@ -335,9 +330,13 @@ fn process_request<W: Write>(
     request: &Request,
     writer: &mut W,
 ) -> std::io::Result<()> {
+    // Reload cache so all handlers see fresh settings.
+    // For expand, a stale/missing cache must be reported to the shell for recompilation.
+    let cache_fresh = state.check_and_reload_if_needed();
+
     match request {
         Request::Expand { lbuffer, rbuffer } => {
-            let result = handle_expand(state, lbuffer, rbuffer);
+            let result = handle_expand(state, lbuffer, rbuffer, cache_fresh);
 
             // Record history using the exact matched expansion (not re-derived)
             if state.history_enabled {
@@ -921,7 +920,7 @@ mod tests {
     #[test]
     fn test_handle_expand_regular() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let output = handle_expand(&mut state, "g", "");
+        let output = handle_expand(&mut state, "g", "", true);
         assert_snapshot!(output.to_string(), @r"
         success
         git
@@ -932,7 +931,7 @@ mod tests {
     #[test]
     fn test_handle_expand_with_placeholder() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let output = handle_expand(&mut state, "gc", "");
+        let output = handle_expand(&mut state, "gc", "", true);
         assert_snapshot!(output.to_string(), @r"
         success
         git commit -m ''
@@ -943,7 +942,7 @@ mod tests {
     #[test]
     fn test_handle_expand_global() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let output = handle_expand(&mut state, "echo NE", "");
+        let output = handle_expand(&mut state, "echo NE", "", true);
         assert_snapshot!(output.to_string(), @r"
         success
         echo 2>/dev/null
@@ -954,7 +953,7 @@ mod tests {
     #[test]
     fn test_handle_expand_evaluate() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let output = handle_expand(&mut state, "echo TODAY", "");
+        let output = handle_expand(&mut state, "echo TODAY", "", true);
         assert_snapshot!(output.to_string(), @r"
         evaluate
         date +%Y-%m-%d
@@ -966,7 +965,7 @@ mod tests {
     #[test]
     fn test_handle_expand_no_match() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let output = handle_expand(&mut state, "unknown", "");
+        let output = handle_expand(&mut state, "unknown", "", true);
         assert_snapshot!(output.to_string(), @"no_match");
     }
 
@@ -990,7 +989,7 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let output = handle_expand(&mut state, "g", "");
+        let output = handle_expand(&mut state, "g", "", true);
         assert_snapshot!(output.to_string(), @"
         candidates
         3
@@ -1010,7 +1009,7 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let output = handle_expand(&mut state, "g", "");
+        let output = handle_expand(&mut state, "g", "", true);
         assert_snapshot!(output.to_string(), @"
         candidates
         1
@@ -1022,7 +1021,7 @@ mod tests {
     fn test_handle_expand_exact_match_over_candidates() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
         // "g" has an exact match → expands to "git", not candidates
-        let output = handle_expand(&mut state, "g", "");
+        let output = handle_expand(&mut state, "g", "", true);
         assert_snapshot!(output.to_string(), @r"
         success
         git
@@ -1033,7 +1032,7 @@ mod tests {
     #[test]
     fn test_handle_expand_with_rbuffer() {
         let (mut state, _dir) = create_test_state(&default_abbrs(), CachedSettings::default());
-        let output = handle_expand(&mut state, "g", " --help");
+        let output = handle_expand(&mut state, "g", " --help", true);
         assert_snapshot!(output.to_string(), @r"
         success
         git --help
@@ -1052,7 +1051,7 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let output = handle_expand(&mut state, "git co", "");
+        let output = handle_expand(&mut state, "git co", "", true);
         assert_snapshot!(output.to_string(), @r"
         success
         git checkout
@@ -1071,7 +1070,7 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let output = handle_expand(&mut state, "npm co", "");
+        let output = handle_expand(&mut state, "npm co", "", true);
         assert_snapshot!(output.to_string(), @"no_match");
     }
 
@@ -1086,7 +1085,7 @@ mod tests {
             },
         ];
         let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
-        let output = handle_expand(&mut state, "mf", "");
+        let output = handle_expand(&mut state, "mf", "", true);
         assert_snapshot!(output.to_string(), @r"
         function
         my_func
@@ -1103,7 +1102,7 @@ mod tests {
             dir.path().join("nonexistent.cache"),
             dir.path().join("nonexistent.toml"),
         );
-        let output = handle_expand(&mut state, "g", "");
+        let output = handle_expand(&mut state, "g", "", true);
         assert_snapshot!(output.to_string(), @"stale_cache");
     }
 
