@@ -80,6 +80,7 @@ struct ServeState {
     config_path: PathBuf,
     cache_path: PathBuf,
     config_mtime: Option<SystemTime>,
+    cache_mtime: Option<SystemTime>,
     history_path: PathBuf,
     history_enabled: bool,
     history_limit: usize,
@@ -102,6 +103,7 @@ impl ServeState {
             config_path,
             cache_path,
             config_mtime: None,
+            cache_mtime: None,
             history_path,
             history_enabled,
             history_limit,
@@ -120,6 +122,9 @@ impl ServeState {
         match cache::read(&self.cache_path) {
             Ok(c) => {
                 self.config_mtime = std::fs::metadata(&self.config_path)
+                    .and_then(|m| m.modified())
+                    .ok();
+                self.cache_mtime = std::fs::metadata(&self.cache_path)
                     .and_then(|m| m.modified())
                     .ok();
                 self.compiled = Some(c);
@@ -144,18 +149,26 @@ impl ServeState {
             return false;
         }
 
-        // If mtime hasn't changed, cache is still fresh
-        if current_mtime == self.config_mtime {
+        // Check if cache file was updated (e.g., by external `abbrs compile`)
+        let cache_mtime = std::fs::metadata(&self.cache_path)
+            .and_then(|m| m.modified())
+            .ok();
+        let cache_changed = cache_mtime != self.cache_mtime;
+
+        // If neither config nor cache mtime changed, still fresh
+        if current_mtime == self.config_mtime && !cache_changed {
             return true;
         }
 
-        // mtime changed — check hash
-        if let Some(ref compiled) = self.compiled {
-            if let Ok(fresh) = cache::is_fresh(compiled, &self.config_path) {
-                if fresh {
-                    // Hash still matches despite mtime change (e.g., touch)
-                    self.config_mtime = current_mtime;
-                    return true;
+        // mtime changed — check hash (only if we have a compiled cache to compare)
+        if !cache_changed {
+            if let Some(ref compiled) = self.compiled {
+                if let Ok(fresh) = cache::is_fresh(compiled, &self.config_path) {
+                    if fresh {
+                        // Hash still matches despite mtime change (e.g., touch)
+                        self.config_mtime = current_mtime;
+                        return true;
+                    }
                 }
             }
         }
@@ -167,6 +180,7 @@ impl ServeState {
                     if fresh {
                         self.compiled = Some(c);
                         self.config_mtime = current_mtime;
+                        self.cache_mtime = cache_mtime;
                         // Refresh history settings from config on hot-reload
                         if let Ok(cfg) = crate::config::load(&self.config_path) {
                             self.history_enabled = cfg.settings.history;
@@ -1195,5 +1209,116 @@ mod tests {
         let mut buf = Vec::new();
         handle_remind(&state, "git push", &mut buf).unwrap();
         assert_snapshot!(response_body(&buf), @"");
+    }
+
+    // === Cache reload tests ===
+
+    #[test]
+    fn test_check_and_reload_detects_cache_mtime_change() {
+        // Simulate: daemon starts with page_size=0, then abbrs compile writes new cache with page_size=5
+        let abbrs = default_abbrs();
+        let (mut state, dir) = create_test_state(&abbrs, CachedSettings::default());
+
+        // Verify initial state: page_size=0
+        assert_eq!(state.compiled.as_ref().unwrap().settings.page_size, 0);
+
+        // Rewrite cache with page_size=5 (simulates `abbrs compile` with new config)
+        let matcher = crate::matcher::build(&abbrs);
+        let settings = CachedSettings {
+            page_size: 5,
+            ..Default::default()
+        };
+        // Small delay to ensure mtime differs
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cache::write(
+            &dir.path().join("abbrs.cache"),
+            &matcher,
+            &settings,
+            &dir.path().join("abbrs.toml"),
+        )
+        .unwrap();
+
+        // check_and_reload_if_needed should detect cache mtime change and reload
+        let fresh = state.check_and_reload_if_needed();
+        assert!(fresh);
+        assert_eq!(state.compiled.as_ref().unwrap().settings.page_size, 5);
+    }
+
+    #[test]
+    fn test_process_request_reloads_cache_for_history() {
+        // Simulate: daemon starts with page_size=0, cache updated, then history request
+        let abbrs = default_abbrs();
+        let (mut state, dir) = create_test_state(&abbrs, CachedSettings::default());
+
+        // Rewrite cache with page_size=3
+        let matcher = crate::matcher::build(&abbrs);
+        let settings = CachedSettings {
+            page_size: 3,
+            ..Default::default()
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cache::write(
+            &dir.path().join("abbrs.cache"),
+            &matcher,
+            &settings,
+            &dir.path().join("abbrs.toml"),
+        )
+        .unwrap();
+
+        // History request should trigger reload and use new page_size
+        let request = Request::History { limit: 10 };
+        let mut buf = Vec::new();
+        process_request(&mut state, &request, &mut buf).unwrap();
+
+        // After process_request, cache should be reloaded with page_size=3
+        assert_eq!(state.compiled.as_ref().unwrap().settings.page_size, 3);
+    }
+
+    #[test]
+    fn test_process_request_reloads_cache_for_expand() {
+        // Simulate: daemon starts with page_size=0, cache updated, then expand request
+        let abbrs = default_abbrs();
+        let (mut state, dir) = create_test_state(&abbrs, CachedSettings::default());
+
+        // Rewrite cache with page_size=5
+        let matcher = crate::matcher::build(&abbrs);
+        let settings = CachedSettings {
+            page_size: 5,
+            ..Default::default()
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cache::write(
+            &dir.path().join("abbrs.cache"),
+            &matcher,
+            &settings,
+            &dir.path().join("abbrs.toml"),
+        )
+        .unwrap();
+
+        // Expand request should trigger reload
+        let request = Request::Expand {
+            lbuffer: "g".to_string(),
+            rbuffer: "".to_string(),
+        };
+        let mut buf = Vec::new();
+        process_request(&mut state, &request, &mut buf).unwrap();
+
+        assert_eq!(state.compiled.as_ref().unwrap().settings.page_size, 5);
+        // Should expand successfully (not stale_cache)
+        let body = response_body(&buf);
+        assert!(body.starts_with("success"), "expected success, got: {}", body);
+    }
+
+    #[test]
+    fn test_no_spurious_reload_when_cache_unchanged() {
+        let abbrs = default_abbrs();
+        let (mut state, _dir) = create_test_state(&abbrs, CachedSettings::default());
+
+        // First call should return true (fresh)
+        assert!(state.check_and_reload_if_needed());
+
+        // Second call without any changes should also return true without reloading
+        assert!(state.check_and_reload_if_needed());
+        assert_eq!(state.compiled.as_ref().unwrap().settings.page_size, 0);
     }
 }
