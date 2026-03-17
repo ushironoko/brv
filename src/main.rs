@@ -419,20 +419,25 @@ fn cmd_expand(
     let cache_file = resolve_cache_path(cache_path)?;
     let config_path = resolve_config_path(cfg)?;
 
-    // Config deleted — no abbreviations should be active
-    if !config_path.exists() {
-        println!("{}", output::ExpandOutput::NoMatch);
-        return Ok(());
-    }
-
     // Load cache
     let compiled = match cache::read(&cache_file) {
         Ok(c) => c,
         Err(_) => {
-            println!("{}", output::ExpandOutput::StaleCache);
+            // Config also missing — nothing to compile, no abbreviations active
+            if !config_path.exists() {
+                println!("{}", output::ExpandOutput::NoMatch);
+            } else {
+                println!("{}", output::ExpandOutput::StaleCache);
+            }
             return Ok(());
         }
     };
+
+    // Config deleted after cache was built — no abbreviations should be active
+    if !config_path.exists() {
+        println!("{}", output::ExpandOutput::NoMatch);
+        return Ok(());
+    }
 
     if let Ok(fresh) = cache::is_fresh(&compiled, &config_path) {
         if !fresh {
