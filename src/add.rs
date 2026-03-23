@@ -326,7 +326,9 @@ fn prompt_select(label: &str, options: &[&str]) -> Result<String> {
 fn print_select_options(options: &[&str], selected: usize) {
     for (i, opt) in options.iter().enumerate() {
         let marker = if i == selected { "▸" } else { " " };
-        eprintln!("    {} {}", marker, opt);
+        // Use \r\n explicitly: in raw mode \n alone only moves down
+        // without returning to column 0, causing display drift.
+        eprint!("    {} {}\r\n", marker, opt);
     }
 }
 
